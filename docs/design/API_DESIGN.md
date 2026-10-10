@@ -796,6 +796,11 @@ class Capabilities(Mapping[Feature, Capability]):
     def details(self, feature: Feature) -> Mapping[str, Any]: ...                  # the full view
 ```
 
+`Support` is an enum, not a set of behaviour objects, because it mostly
+describes: it feeds the capability matrix and `supports()`, and only
+`UNSUPPORTED` changes what an operation does. `LossPolicy`, whose values
+*are* behaviours, is an object ([§5.3](#53-what-happens-when-the-caller-asks-for-something-unsupported)).
+
 **A yes/no answer is not enough, and neither is a level alone.** That is
 caldav's experience with its compatibility matrix, where a value is a
 boolean, a string or a dict, and helper methods reduce a dict to a boolean
@@ -874,15 +879,36 @@ Three cases, matching the roadmap's "raise, degrade, or emulate":
 - **Unsupported operation → raise, before I/O.** `UnsupportedError`
   carries the `Feature`. Checked at the boundary, as Home Assistant does
   with its service-call validation, so nothing is half done.
-- **Lossy write → depends on `LossPolicy`** (`class LossPolicy(Enum)`:
-  `RAISE`, `WARN`, `ALLOW`), **default `RAISE`.** The backend's
-  mapper runs before the write is sent and returns a list of what it could
-  not store (a priority of 3 on a backend with three levels, a fourth
-  status, a `DEPENDS-ON` to Gitea's API version without dependencies).
-  `RAISE` raises `LossyWriteError` with that list and sends nothing; `WARN`
-  emits `LossyWriteWarning` and writes; `ALLOW` writes. The policy is set
-  per workspace or backend and can be overridden per call (`loss=`). Default
-  `RAISE` because the alternative is the Home Assistant failure ([prior art §1.4, Home Assistant](PRIOR_ART_AND_DECISIONS.md#14-home-assistant)): `IN-PROCESS` silently becoming `needs_action`. A warning is also
+- **Lossy write → depends on the `LossPolicy`, default `RAISE`.** The
+  backend's mapper runs before the write is sent and returns a list of what
+  it could not store (a priority of 3 on a backend with three levels, a
+  fourth status, a `DEPENDS-ON` to Gitea's API version without
+  dependencies). The policy is then called with that list. It is an object,
+  not an enum, so that each behaviour lives in one place and a caller can
+  supply its own (the strategy pattern, suggested in the
+  [PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4237585911)):
+
+  ```python
+  @dataclass(frozen=True)
+  class Loss:
+      property: str                     # e.g. "PRIORITY", "STATUS", "RELATED-TO"
+      sent: object                      # the value in the item
+      stored: object | None             # what the backend will store instead; None if dropped
+
+  class LossPolicy(Protocol):
+      def __call__(self, losses: Sequence[Loss], item: Item) -> None: ...
+          # return: the write goes ahead; raise: nothing is sent
+
+  RAISE: LossPolicy                     # raises LossyWriteError(losses)
+  WARN: LossPolicy                      # emits LossyWriteWarning, then returns
+  ALLOW: LossPolicy                     # returns
+  ```
+
+  The three stock policies live in `calendaring.loss`. A caller's own policy
+  can log the losses, collect them for a report, or allow some properties
+  and raise on others. The policy is set per workspace or backend and can
+  be overridden per call (`loss=`). A configuration file names one of the
+  stock three (`raise`, `warn`, `allow`). Default `RAISE`, because the alternative is the Home Assistant failure ([prior art §1.4, Home Assistant](PRIOR_ART_AND_DECISIONS.md#14-home-assistant)): `IN-PROCESS` silently becoming `needs_action`. A warning is also
   what [roadmap 1.3](ROADMAP.md#13-syncasync-scaffolding)'s `-W error` test runs turn back into a failure.
 - **Emulation → automatic, only when indistinguishable.** Client-side
   filtering, change listing and cross-backend move are emulated without
