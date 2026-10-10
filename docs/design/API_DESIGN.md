@@ -2,7 +2,7 @@
 
 **Roadmap item:** [1.1 Unified API design and peer review](ROADMAP.md#11-unified-api-design-and-peer-review)
 
-**Status:** draft by Claude Opus 5.5, 2026-10-08. Reviewed and edited by the author on the following days, and his comments applied. The A1 rework was accepted on 2026-10-10. Not yet peer-reviewed ([§11 Peer review](#11-peer-review)).
+**Status:** draft by Claude Opus 5.5, 2026-10-08. Reviewed and edited by the author on the following days, and his comments applied. The A1 rework was accepted on 2026-10-10. Peer review started on 2026-10-10 in [PR 5](https://github.com/pycalendar/calendaring/pull/5) ([§11 Peer review](#11-peer-review)).
 
 **Inputs:** [0.1 task model survey](TASK_MODEL_SURVEY.md), [0.2 sync/async decision](SYNC_ASYNC_ARCHITECTURE.md#11-decision), [0.3 decisions D1–D7](PRIOR_ART_AND_DECISIONS.md#part-3-project-decisions)
 
@@ -326,8 +326,20 @@ class AsyncCollection:
     # change detection
     async def changes(self, token: SyncToken | None = None) -> ChangeSet[AsyncItem]: ...
 
+    async def set_name(self, name: str) -> None: ...      # collection.set-name; updates self.name
     async def delete_collection(self) -> None: ...
 ```
+
+**Attributes do no I/O; methods do.** `name` and `color` are what the
+backend reported when it listed the collection. Assigning to them would
+have to write to the server as a side effect, so renaming is an explicit
+`set_name()`, which raises `UnsupportedError` where the backend cannot
+rename (a feed, a single `.ics` file). The same goes for items: there is no
+`collection.save()` without an argument, and no autosave (but see
+[§10](#10-open-questions), Q13). This follows caldav, which settled on
+methods for anything that talks to the server. *Proposed by the author in
+the [PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4237526933);
+open to the reviewer.*
 
 **`add` creates, `save` updates.** `add` fails with `AlreadyExistsError` if
 the UID is taken (CalDAV `If-None-Match: *`). `save` sends the item's `etag`
@@ -814,6 +826,7 @@ initial set:
 | `write` | create, update and delete items at all |
 | `component.event`, `component.task`, `component.journal` | can hold that component |
 | `create-collection`, `delete-collection` | backend-level |
+| `collection.set-name` | `set_name()` |
 | `search.server-side`, `search.time-range`, `search.text` | how much the server filters; never affects results ([§4 Search](#4-search)) |
 | `changes` | `changes()`: `FULL` with a native token, `EMULATED` by listing |
 | `write.conditional` | `FULL` with an atomic precondition (ETag, `content_version`); `EMULATED` read-compare-write |
@@ -1139,6 +1152,13 @@ For the author and for peer review. Each has a proposed answer; none blocks
    completion" guess for an `RRULE` without `BY*` parts until then: a
    known deviation from [§2.3 Collection](#23-collection), listed in the
    capability matrix.
+   *Agreed with recurring-ical-events' maintainer in the
+   [PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4237580140),
+   2026-10-10*, with this split: the merge itself (inserting or replacing
+   an override in a recurrence set, completing one occurrence) goes to
+   `recurring_ical_events` as `icalendar` manipulation with no I/O. Working
+   out that `save(occurrence)` needs a merge, and fetching the stored
+   object to merge into, stays here, because it is I/O.
 4. *Decided, 2026-10-10:* **`verify=True`** on writes is in from the first
    release ([§5.3 What happens when the caller asks for something unsupported](#53-what-happens-when-the-caller-asks-for-something-unsupported)).
 5. *Resolved, 2026-10-09:* assignees are `ATTENDEE`s with the tracker's
@@ -1240,13 +1260,36 @@ For the author and for peer review. Each has a proposed answer; none blocks
       `SEQUENCE` or `LAST-MODIFIED`. A generated occurrence has no override,
       and a concurrent edit of the master (its `RRULE`, its `DTSTART`)
       changes it too, so there the check is the master's.
+13. **Change tracking and write strategies** (the reviewer's "borrowing",
+    [PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4237509309)).
+    Edits to an item would mark it dirty and notify a strategy, which writes
+    at once, gathers and flushes on request, or syncs in the background. The
+    [p5 prototype](SYNC_ASYNC_ARCHITECTURE.md#12-revisited-the-adapter-pattern-2026-10-10)
+    shows gather-and-flush working in both modes without duplicated I/O.
+    Since the item has no properties of its own
+    ([§3.1](#31-the-base-a-typed-view-over-icalendar)), the notification
+    has to come from `icalendar`: a write through `item.component` would
+    otherwise go untracked. That has been asked of `icalendar`'s
+    maintainer. Until then, `save()` stays explicit and is the primitive
+    any such layer would be built on.
 
 ---
 
 ## 11. Peer review
 
-Not started. The roadmap's warning applies: a review is a dependency on
-someone else's calendar.
+Started 2026-10-10: an `icalendar` and `recurring-ical-events` maintainer
+(@niccokunzmann) is reviewing in
+[PR 5](https://github.com/pycalendar/calendaring/pull/5). What it has changed
+so far: the item base class is `Item` and carries no iCalendar properties of
+its own ([§3.1](#31-the-base-a-typed-view-over-icalendar)); what an item may
+hold is spelled out ([What an item contains](#what-an-item-contains)); the
+occurrence merge goes to `recurring_ical_events` (Q3); and change tracking is
+open as Q13. His proposal of per-mode adapters (`item.sync.save()`) was
+prototyped and not adopted
+([sync/async §12](SYNC_ASYNC_ARCHITECTURE.md#12-revisited-the-adapter-pattern-2026-10-10)).
+He has asked for an in-person conversation about the object design. The
+roadmap's warning applies: a review is a dependency on someone else's
+calendar.
 
 | Reviewer (role) | Why | What to ask |
 |---|---|---|
