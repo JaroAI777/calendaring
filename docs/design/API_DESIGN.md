@@ -896,9 +896,10 @@ What the library cannot catch: a server that declares `UNKNOWN` and then
 silently drops a property. caldav's hints call that `unsupported`; only a
 probe (caldav-server-tester) or a read-back finds it. So every write takes
 `verify=True`, from the first release: after the write the item is
-reloaded and compared with what was sent. The comparison covers the
-properties the library models ([§3 Items](#3-items)), after normalisation,
-and skips what servers legitimately change: `DTSTAMP`, `SEQUENCE`, property
+reloaded and compared with what was sent. The comparison covers every
+property that was sent, after normalisation, except those the mapper had
+already reported as not storable (a lossy write, above), and skips what
+servers legitimately change: `DTSTAMP`, `SEQUENCE`, property
 order, and the identity a backend assigns (`uid`, `native_id`, `etag`;
 [§3.2 Identity](#32-identity)). A difference raises `VerificationError`
 listing what the server dropped or changed. It is not a `LossyWriteError`:
