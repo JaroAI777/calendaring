@@ -518,10 +518,12 @@ Why:
 - The desktop PIM stacks that solved this problem made the same choice (§1.6).
 - It gives pass-through of unknown properties for free (Part 2).
 
-The friendly object model 1.1 designs (`task.due`, `task.estimate`, …) is a
+The object model 1.1 designs (`task.component.DUE`, `task.component.summary`, …) is a
 typed view *over* the iCalendar component, not a separate model with its own
 storage. That keeps round-tripping lossless, which Home Assistant's two-status
-`TodoItem` (§1.4) shows is the thing a thin model loses first.
+`TodoItem` (§1.4) shows is the thing a thin model loses first. (1.1 went further and
+dropped its own fields: the item exposes `icalendar`'s typed properties
+through `item.component`; [API spec §3.1](API_DESIGN.md#31-the-base-a-typed-view-over-icalendar).)
 
 The author's view is that `icalendar` is good enough, with one condition: the
 [0.1 survey](TASK_MODEL_SURVEY.md) proposes fields that RFC 5545 has no

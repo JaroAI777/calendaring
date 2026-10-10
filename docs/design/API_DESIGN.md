@@ -30,9 +30,11 @@ The I/O classes come in a sync and an async version. The items are plain
 data, so helpers are written once for both modes; what a collection hands
 out is that data bound to it (`AsyncTask`, `SyncTask`), which adds
 `save()`, `complete()` and the like (**A1**, [§1](#1-layers-and-modes),
-[§2](#2-the-io-classes)). An item is a typed view over an
-`icalendar.Calendar` and reuses `icalendar`'s typed properties rather than
-redefining them (**A2**, [§3](#3-items)).
+[§2](#2-the-io-classes)). An item wraps an `icalendar.Calendar`, and its
+iCalendar properties are read and written through `icalendar`'s own typed
+properties (`item.component.summary`). The item adds identity and the few
+fields iCalendar has no property for, and redefines none of the others
+(**A2**, [§3](#3-items)).
 
 **Same answer everywhere.** Backends differ in how well they can search,
 so the server's answer is never trusted alone: a backend may filter
@@ -141,7 +143,7 @@ generator (unasync would otherwise produce `SyncWorkspace`).
 **How items are made.** Library users do not call the bound classes'
 constructors:
 - A data item comes from a factory, not a constructor:
-  `Task.new(summary=..., due=...)`, `Task.from_ical(data)` or
+  `Task.new(summary=..., end=...)`, `Task.from_ical(data)` or
   `Task.from_icalendar(calendar)` ([§3.1](#31-the-base-a-typed-view-over-icalendar)).
 - A bound item comes from a collection: from a read (`search`, `get`, …),
   from a write (`add`, `save`, …), from `collection.add_task(**properties)`
@@ -381,35 +383,47 @@ class Item:
     icalendar: icalendar.Calendar       # the whole VCALENDAR, VTIMEZONEs included
     component: icalendar.Component      # the one that describes the item; see "What an item contains"
 
-    uid: str
+    uid: str                            # read-only: component's UID; identity, see "Identity"
     native_id: str | None               # backend's own id; None until stored
     etag: str | None                    # real or synthetic (see "Change detection"); None until stored
     collection_id: str | None
     native: object | None               # see "The escape hatch"
-
-    summary: str | None
-    description: str | None
-    categories: list[str]
-    relations: list[Relation]           # RELATED-TO; Relation(uid: str, reltype: str = "PARENT"), RFC 9253 RELTYPE
-    attendees: list[Attendee]           # ATTENDEE; on a task, its assignees (see "Task")
-    organizer: Attendee | None          # ORGANIZER
-    created: datetime | None
-    last_modified: datetime | None
-
     is_occurrence: bool                 # True when the item is one occurrence, not the whole stored object
-    recurrence_id: date | datetime | None   # read-through: component's RECURRENCE-ID, None on a master
 
     def copy(self) -> Self: ...
 ```
 
-Per [D6](PRIOR_ART_AND_DECISIONS.md#d6-canonical-in-memory-model) the `icalendar` object is the storage, and the attributes read and
-write through to it. **They delegate to `icalendar`'s own typed
-properties** — `Todo.DUE`, `Todo.start`, `Todo.duration`, `uid`,
-`categories`, the `Event`/`Todo`/`Journal.new()` constructors — which
-`icalendar` 6–7 already provides; this library adds only what it lacks
-([§3.4 Task](#34-task), [§3.6 Properties with no standard home](#36-properties-with-no-standard-home)). There is one source of truth, so a caller who edits
-`item.icalendar` directly sees the change in the typed attributes and vice
-versa, and properties the library does not model survive a round trip
+**The item does not repeat iCalendar's properties.** Per
+[D6](PRIOR_ART_AND_DECISIONS.md#d6-canonical-in-memory-model) the
+`icalendar` object is the storage, and its properties are read and written
+through `icalendar`'s own typed properties on `component`:
+
+```python
+task.component.summary = "Write the report"
+task.component.DUE = datetime(2026, 11, 1, 12, tzinfo=oslo)
+task.component.end          # DUE, or DTSTART + DURATION
+task.component.duration     # DUE - DTSTART
+task.component.status       # icalendar.enums.STATUS
+event.component.attendees
+```
+
+`icalendar` 7.3 has typed properties for nearly all of what the first
+draft listed here: `summary`, `description`, `categories`, `uid`,
+`organizer`, `attendees`, `created`, `last_modified`, `status`, `priority`,
+`start`, `end`, `duration`, `sequence`, `location`, `url`, `related_to`,
+`rrules`, `exdates`, and `RECURRENCE_ID` (upper case, like `DUE`). A
+property it lacks (`PERCENT-COMPLETE`, `COMPLETED`, `ESTIMATED-DURATION`) is read as plain
+iCalendar (`component.get("PERCENT-COMPLETE")`) and proposed to `icalendar`
+upstream, not added here. Duplicating each property per item type in this
+library would be a maintenance burden for no gain, and two typed APIs for
+one value would drift apart. *Decided by the author, 2026-10-10* (in the
+[PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4237509309)).
+
+What the item does add is what iCalendar has no property for: identity and
+backend state (above), `is_occurrence`, and on a task the native values of
+[§3.5](#35-native-passthrough) and the `X-PYCAL-*` fields of
+[§3.6](#36-properties-with-no-standard-home). There is one source of truth,
+so properties the library does not know about survive a round trip
 untouched (a conformance test proposed in [prior art Part 2](PRIOR_ART_AND_DECISIONS.md#part-2-standards)).
 
 #### What an item contains
@@ -420,11 +434,11 @@ of a collection. An item holds one component type (plus `VTIMEZONE`s) and one
 `UID`, as RFC 4791 §4.1 requires of a stored object, and it is exactly one of
 these three:
 
-| The item is | `icalendar` holds | `component` | `is_occurrence` | `recurrence_id` | caldav [#398](https://github.com/python-caldav/caldav/issues/398) |
+| The item is | `icalendar` holds | `component` | `is_occurrence` | `RECURRENCE-ID` on `component` | caldav [#398](https://github.com/python-caldav/caldav/issues/398) |
 |---|---|---|---|---|---|
-| a non-recurring item | one component | that component | `False` | `None` | 100 |
-| a full recurrence set | the master (`RRULE` or `RDATE`) and all its overridden occurrences, if any | the master | `False` | `None` | 110, 011 |
-| a single occurrence | one component: a generated occurrence, or an override | that occurrence | `True` | its `RECURRENCE-ID` | 101 |
+| a non-recurring item | one component | that component | `False` | absent | 100 |
+| a full recurrence set | the master (`RRULE` or `RDATE`) and all its overridden occurrences, if any | the master | `False` | absent | 110, 011 |
+| a single occurrence | one component: a generated occurrence, or an override | that occurrence | `True` | set | 101 |
 
 **A single occurrence is part of a stored object, not all of it.** The
 stored object may also hold the master and other overrides that the item
@@ -499,7 +513,7 @@ Rules for bound items:
   in. `collection.move()` returns the item bound to the target.
 
 Factories, which library users call instead of constructors:
-`Task.new(summary=..., due=..., **properties)`, `Task.from_ical(data)` (a
+`Task.new(summary=..., end=..., **properties)`, `Task.from_ical(data)` (a
 string or bytes) and `Task.from_icalendar(calendar)` (an
 `icalendar.Calendar` already parsed). The `uid` defaults to a fresh UUID,
 as `icalendar.Todo.new` does. Bound items come only from a collection
@@ -527,21 +541,14 @@ round-trip, and the conformance suite asserts it.
 ### 3.3 Event and Journal
 
 ```python
-class Event(Item):
-    start: date | datetime | None       # DTSTART
-    end: date | datetime | None         # DTEND, or DTSTART + DURATION
-    duration: timedelta | None
-    all_day: bool
-    location: str | None
-    rrule: icalendar.vRecur | None
-
-class Journal(Item):
-    start: date | datetime | None       # DTSTART
+class Event(Item): ...                  # component is an icalendar.Event
+class Journal(Item): ...                # component is an icalendar.Journal
 ```
 
-Deliberately thin: everything else is reachable through `component`. The
-funded backends do not need more, and each typed attribute is a promise
-that every backend's mapper handles it.
+No fields of their own: `component.start`, `component.end`,
+`component.duration`, `component.location` and `component.rrules` are
+`icalendar`'s. The classes exist so that a collection can say what it
+returns and a helper can say what it takes.
 
 ### 3.4 Task
 
@@ -556,54 +563,47 @@ class TaskStatus(StrEnum):              # values are the iCalendar strings
     CANCELLED = "CANCELLED"
     FAILED = "FAILED"                   # tasks draft
 
-class Task(Item):
-    status: TaskStatus                  # STATUS; NEEDS_ACTION when absent
-    native_status: str | None           # see "Native passthrough"
-    priority: int                       # PRIORITY, 0-9, 0 = undefined, 1 = highest
-    native_priority: str | None         # see "Native passthrough"
-    percent_complete: int | None        # PERCENT-COMPLETE
-
-    start: date | datetime | None       # DTSTART: earliest sensible start (tasks draft reading)
-    due: date | datetime | None         # DUE, or DTSTART + DURATION
-    completed: datetime | None          # COMPLETED
-    planned_start: datetime | None      # X-PYCAL-PLANNED-START
+class Task(Item):                       # component is an icalendar.Todo
+    native_status: str | None           # see "Native passthrough"; not in the iCalendar data
+    native_priority: str | None         # likewise
+    planned_start: datetime | None      # X-PYCAL-PLANNED-START (see "Properties with no standard home")
     planned_end: datetime | None        # X-PYCAL-PLANNED-END
-
-    duration: timedelta | None          # derived: DUE - DTSTART; see set_duration()
-    estimate: timedelta | None          # ESTIMATED-DURATION (tasks draft)
     # time_log, time_spent: added by roadmap 1.6
-
-    parent: str | None                  # convenience over relations: the PARENT uid
-    depends_on: list[str]               # convenience: DEPENDS-ON uids
-    rrule: icalendar.vRecur | None
 
     def set_duration(self, duration: timedelta, keep: Literal["start", "due"] = "due") -> None: ...
 ```
+
+Everything else is a property of the `VTODO`, read and written through
+`component`. `TaskStatus` is the vocabulary backends map `STATUS` to and
+from. It is not a field: `icalendar.enums.STATUS` has no `PENDING` or
+`FAILED`, which the tasks draft adds, so those two are a candidate for
+`icalendar` too. `set_duration()` is a method rather than a property
+because it changes two of them.
 
 Decisions in it, each from the survey:
 
 - **`DTSTART` means earliest sensible start.** That is the tasks draft's
   reading and the first in the survey's table; the other senses the survey
-  found (planned start, expected completion) get their own fields instead
+  found (planned start, expected completion) get their own properties instead
   of overloading it. Actual start comes from the time log ([roadmap 1.6](ROADMAP.md#16-time-tracking-model-and-api)), not from a field.
 - **`duration` is derived, not stored.** On a task, `DURATION` is either
-  `DUE − DTSTART` or a misused estimate. `task.duration` reads
-  `DUE − DTSTART` (or `DURATION` when only that is present), and
+  `DUE − DTSTART` or a misused estimate. `icalendar`'s `Todo.duration`
+  reads `DUE − DTSTART` (or `DURATION` when only that is present), and
   `task.set_duration(d, keep="due" | "start")` moves the other end, as
   caldav's `set_duration(movable_attr=…)` does; plann uses both. The
   default keeps `DUE`, as caldav's does, because a deadline is more often
   fixed than a start. The
-  estimate is `estimate` (`ESTIMATED-DURATION`), never `duration`.
+  estimate is `ESTIMATED-DURATION`, never `DURATION`.
 - **`remaining` is left out** ([survey §4.4](TASK_MODEL_SURVEY.md#44-details-to-be-decided-later)). Two of the nine systems carry
-  it, neither is a funded backend, and every typed field is a mapping
-  obligation on every backend. It is reachable through the escape hatch on
+  it, neither is a funded backend, and every field the library defines is a
+  mapping obligation on every backend. It is reachable through the escape hatch on
   the backends that have it, and can be added later without breaking
   anything.
 - **`priority` is iCalendar's 0–9.** The survey found five incompatible
   scales; the mapping to each is the backend's, documented as lossy.
   plann's semantics for 1–9 sit on top of this and are plann's.
-- **Assignees are the task's `attendees`**, defined on the base class
-  because events have them too. The tasks draft (section 6) says it in so
+- **Assignees are the task's `ATTENDEE`s** (`component.attendees`), as on
+  any other component. The tasks draft (section 6) says it in so
   many words: "Tasks are assigned to actors using one or more RFC5545
   'ATTENDEE' properties and/or one or more RFC9073 'PARTICIPANT'
   calendar components." So the standard has no gap here, and no `X-`
@@ -614,29 +614,24 @@ Decisions in it, each from the survey:
   `ATTENDEE;CN=Alice:https://gitea.example.com/alice`. That is valid,
   unique, resolvable, and round-trips, with no fake e-mail address. Mapping
   logins to and from those URIs is the backend's job, and
-  `task.assignees` is not a separate field, to avoid two names for one
-  thing.
-
-  ```python
-  @dataclass
-  class Attendee:
-      address: str                      # the CAL-ADDRESS URI: mailto:, https:, ...
-      name: str | None = None           # CN
-      role: str | None = None           # ROLE
-      status: str | None = None         # PARTSTAT, including the tasks draft's FAILED
-  ```
+  there is no separate assignees field, to avoid two names for one
+  thing. The name, role and participation status are the `ATTENDEE`'s
+  `CN`, `ROLE` and `PARTSTAT` parameters, on `icalendar`'s `vCalAddress`.
 
 ### 3.5 Native passthrough
 
 `native_status` and `native_priority` are a plain `str | None`, set by the
 backend that read the item, and **not serialised into the iCalendar
 data** — a Kanboard column name means nothing to a CalDAV server. The rule
-that makes them round-trip: setting `status` (or `priority`) clears the
-native value. On save, a backend that sees a native value uses it; one that
-sees `None` maps the normalised value. So a card read from the "Review"
-column (normalised `IN_PROCESS`) and saved unchanged stays in "Review", and
-one that the caller sets to `COMPLETED` goes wherever the backend maps
-`COMPLETED`.
+that makes them round-trip: the backend remembers the `STATUS` (or
+`PRIORITY`) it wrote into the item along with the native value. On save,
+if the property still has that value, the backend uses the native value;
+if the caller changed it, the backend maps the new value. So a card read
+from the "Review" column (normalised `IN-PROCESS`) and saved unchanged
+stays in "Review", and one that the caller sets to `COMPLETED` goes
+wherever the backend maps `COMPLETED`. Comparing on save, rather than
+clearing the native value in a setter, also catches a change made through
+`item.icalendar` directly.
 
 This answers [survey §4.4](TASK_MODEL_SURVEY.md#44-details-to-be-decided-later)'s question "plain string or typed object": a plain
 string. Legal transitions (RT, OpenProject) are reachable through `native`
@@ -671,7 +666,7 @@ occurrence a "recurrence instance", and caldav calls it a "recurrence"
 set"), and the two senses get mixed up.
 
 `search(..., expand=True)` returns occurrences, one item per occurrence:
-items with `is_occurrence` set and `recurrence_id` filled in, expanded by
+items with `is_occurrence` set and a `RECURRENCE-ID` on `component`, expanded by
 `recurring_ical_events` via `icalendar-searcher`. Several occurrences of
 one series in the search window are several items with the same `uid`
 ([What an item contains](#what-an-item-contains)).
@@ -830,6 +825,10 @@ initial set:
 | `task.start`, `task.due`, `task.completed`, `task.planned`, `task.estimate` | |
 | `task.relations.parent`, `task.relations.depends-on` | |
 | `categories`, `attendees` | for every component; on a task, attendees are its assignees |
+
+Feature names are identifiers, not attribute paths: `task.due` means "stores a
+task's `DUE`", which is read as `task.component.DUE`, and `task.estimate`
+means `ESTIMATED-DURATION`.
 
 [roadmap 1.6](ROADMAP.md#16-time-tracking-model-and-api) adds `task.time-log` and friends. Below 1.0 the list grows as backends need
 it ([§10 Open questions](#10-open-questions), Q7). The conformance suite
@@ -1057,14 +1056,14 @@ caldav's public API as of 2026-10-08 (caldav 3.4.0).
 | `complete(handle_rrule=True, rrule_mode=…)` | `task.complete(mode=…)` | same modes; caldav's "interval from completion" guess is dropped |
 | `complete()` on a recurring task, default `handle_rrule=False` | `task.complete()` handles the `RRULE` (`mode="safe"`) | **behaviour change**: caldav completes the whole series by default |
 | `uncomplete()` | `task.uncomplete()` | same |
-| `is_pending()` | `task.status` | changed: no helper |
-| `get_due()`, `get_duration()`, `set_duration(movable_attr=…)`, `get_dtend()`, `set_end()` | `task.due`, `task.duration`, `task.set_duration(keep=…)`, `event.end` | same, as attributes |
-| `set_due(due, move_dtstart=…, check_dependent=…)` | `task.due = …` | **not yet**: `move_dtstart` and `check_dependent` |
-| `set_relation()`, `get_relatives()` | `item.relations`, `item.relatives()` | same |
+| `is_pending()` | `task.component.status` | changed: no helper |
+| `get_due()`, `get_duration()`, `set_duration(movable_attr=…)`, `get_dtend()`, `set_end()` | `task.component.end`, `task.component.duration`, `task.set_duration(keep=…)`, `event.component.end` | same, through `icalendar`'s properties |
+| `set_due(due, move_dtstart=…, check_dependent=…)` | `task.component.DUE = …` | **not yet**: `move_dtstart` and `check_dependent` |
+| `set_relation()`, `get_relatives()` | `item.component.related_to`, `item.relatives()` | same |
 | `check_reverse_relations()`, `fix_reverse_relations()` | — | **not yet** |
 | `objects_by_sync_token()` | `collection.changes(token)` | same |
-| `save_with_invites()`, `accept_invite()`, `decline_invite()`, `change_attendee_status()`, `schedule_inbox()`, `freebusy_request()` | `attendees`, `organizer` as data only | escape hatch; scheduling (iTIP) is outside the funded scope |
-| `add_attendee()`, `add_organizer()` | `item.attendees.append(…)` | same, as data |
+| `save_with_invites()`, `accept_invite()`, `decline_invite()`, `change_attendee_status()`, `schedule_inbox()`, `freebusy_request()` | `ATTENDEE`, `ORGANIZER` as data only | escape hatch; scheduling (iTIP) is outside the funded scope |
+| `add_attendee()`, `add_organizer()` | `item.component.attendees`, `item.component.organizer` | same, as data |
 | `propfind()`, `proppatch()`, `report()`, `mkcol()`, `request()` | — | escape hatch (`backend.native`) |
 | compatibility hints, `features:` profile | derived capabilities ([§5.1 The table](#51-the-table)); the profile stays in the config | same source |
 

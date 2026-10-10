@@ -835,9 +835,11 @@ Results (`test_conformance.py`, `test_p5_adapter.py`, 141 passed):
   itself.
 - **Size**, in code lines: p4's `_async/tasks.py` is 40. p5's
   `_async/ops.py` is 66 (gather included) and `adapter.py` is 87 (a property
-  pair per field, borrowing, modes, strategies). The property pairs cost
-  nothing extra in the real library, because A2's attributes are already
-  properties delegating to `icalendar`.
+  pair per field, borrowing, modes, strategies). The property pairs
+  would be new cost in the real library: A2 has the item expose
+  `icalendar`'s own properties through `item.component` instead of
+  defining any of its own, so tracking changes there would need change
+  notification in `icalendar` itself.
 
 ### 12.3 What this changes
 
