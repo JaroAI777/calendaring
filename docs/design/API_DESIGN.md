@@ -1298,7 +1298,10 @@ For the author and for peer review. Each has a proposed answer; none blocks
     has to come from `icalendar`: a write through `item.component` would
     otherwise go untracked. That has been asked of `icalendar`'s
     maintainer. Until then, `save()` stays explicit and is the primitive
-    any such layer would be built on.
+    any such layer would be built on. An alternative that needs nothing
+    from `icalendar`, delegating unknown item attributes to `component`,
+    is sketched in the working document
+    [WIP_ITEM_DELEGATION.md](WIP_ITEM_DELEGATION.md).
 
 ---
 
