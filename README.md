@@ -2,6 +2,8 @@
 
 *One Python API for calendars and task lists: CalDAV, JMAP, iCalendar feeds, local files and issue trackers.*
 
+**Purpose:** today, a program that works with calendar data has to pick a library for each place the data lives: `caldav` for a CalDAV server, `calendaring-jmap` for a JMAP server, `icalendar` and file handling for `.ics` files on disk.  This library gives one way to read and change that data, wherever it lives.  An application written against it can be pointed at a CalDAV server, a local `.ics` file or an issue tracker by changing its configuration, not its code.  Keeping two of those systems in step is a different job, done by [calendaring-sync](https://github.com/pycalendar/calendaring-sync).  The design is in [docs/design/API_DESIGN.md](docs/design/API_DESIGN.md).
+
 The library is called `calendaring`: the same name on GitHub, on PyPI and as the import (see [the 0.3 decisions](docs/design/PRIOR_ART_AND_DECISIONS.md#d2-the-name)).  It was earlier called `calendaring-client`.  "Calendaring" is the IETF's word, and in RFC 5545 it covers tasks too, but few people know that, so the tagline above carries the message that this library supports tasks and not only events.
 
 ## Background

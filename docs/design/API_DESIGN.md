@@ -62,6 +62,25 @@ first, and `X-PYCAL-*` only as a last resort (**A9**,
 object as `.native`, and tasks keep the backend's own status and priority
 as `native_status` / `native_priority` (**A8**, [§8](#8-the-escape-hatch)).
 
+### Glossary
+
+Terms used before the section that defines them:
+
+| Term | Meaning |
+|---|---|
+| backend | one configured place data lives: a CalDAV account, a JMAP account, a directory, a file, a feed, a Gitea instance ([§1](#1-layers-and-modes)) |
+| collection | what holds items: a calendar, a task list, a directory, a repository |
+| item | one event, task or journal: one `VCALENDAR` with the components of one `UID` ([§3.1](#what-an-item-contains)) |
+| occurrence | one instance of a recurring item; an item can be a single occurrence (`is_occurrence`) |
+| data item / bound item | `Task` is plain data and does no I/O; `AsyncTask` / `SyncTask` is the same data plus the collection it came from, and has `save()` ([§1.1](#11-sync-and-async)) |
+| mode | sync or async. The async code is written by hand, the sync code generated from it by unasync |
+| `native_id` | the backend's own key for a stored item: a CalDAV href, a file name, an issue number ([§3.2](#32-identity)) |
+| `etag` | a value that changes whenever the stored item changes; the server's ETag, or one made up by the library ([§7](#7-change-detection)) |
+| token, change set | `changes()` returns what changed (a `ChangeSet`) and a token to pass next time, to get what changed since ([§7](#7-change-detection)) |
+| capability, feature, support level | per collection, a table of what it can do (`Feature`) and how well (`FULL`, `LOSSY`, `EMULATED`, `UNSUPPORTED`, `UNKNOWN`) ([§5](#5-capabilities)) |
+| lossy write, loss policy | a write the backend can store only by changing or dropping a value; the loss policy says whether it raises, warns or goes ahead ([§5.3](#53-what-happens-when-the-caller-asks-for-something-unsupported)) |
+| escape hatch, `.native` | the backend's own object behind ours, for what this API does not cover ([§8](#8-the-escape-hatch)) |
+
 ---
 
 ## 1. Layers and modes
@@ -295,7 +314,8 @@ class AsyncCollection:
     async def relatives(self, item: Item, reltype: str | None = None) -> list[AsyncItem]: ...
 
     # writing
-    async def add(self, item: Item, *, loss: LossPolicy | None = None,
+    async def add(self, item: Item, *, native_id: str | None = None,
+                  loss: LossPolicy | None = None,
                   verify: bool | None = None) -> AsyncItem: ...
     async def add_task(self, *, loss: LossPolicy | None = None, verify: bool | None = None, **properties: Any) -> AsyncTask: ...   # add(Task.new(**properties))
     async def add_event(self, *, loss: LossPolicy | None = None, verify: bool | None = None, **properties: Any) -> AsyncEvent: ...
@@ -342,13 +362,24 @@ the [PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4
 open to the reviewer.*
 
 **`add` creates, `save` updates.** `add` fails with `AlreadyExistsError` if
-the UID is taken (CalDAV `If-None-Match: *`). `save` sends the item's `etag`
+the UID or the name is taken (CalDAV `CALDAV:no-uid-conflict` or a 412 on
+`If-None-Match: *`; `.taken` below says which). `save` sends the item's `etag`
 as a precondition and fails with `ConflictError` if the stored object has
 changed since it was read; `overwrite=True` drops the precondition. caldav has
 a `save()` that can be used both for adding and saving, causing a risk of 
 lost updates.
 
-**Collection writes return the stored item; bound methods update in
+`add(native_id=...)` names the stored object (a CalDAV href such as
+`<uuid>.ics`, a vdir file name), so a caller whose response was lost can
+find its own create by that name. Where the backend assigns ids (Gitea,
+JMAP) it raises `UnsupportedError(Feature.IDENTITY_CLIENT_NATIVE_ID)`
+before any I/O. `AlreadyExistsError.taken` says which clash it was:
+`"native_id"` (CalDAV 412 on `If-None-Match: *`) or `"uid"` (the
+`no-uid-conflict` precondition: another object holds the UID). A sync tool
+handles the two differently. *Asked for by calendaring-sync
+([PR 19](https://github.com/pycalendar/calendaring-sync/pull/19#issuecomment-6114023463)).*
+
+**Collection writes return the written item; bound methods update in
 place.** `collection.save(item)` and the other collection writes return a new
 bound copy with the new `etag`, and, on a backend that cannot store a
 caller-chosen UID (Gitea, [§3.2 Identity](#32-identity)), a different `uid`
@@ -357,6 +388,16 @@ item or belong to another collection. A bound item's own methods
 (`task.save()`, `task.complete()`, `task.reload()`) update the item itself
 with those values, as caldav's do, so `task.save(); ...; task.save()` works
 without a stale etag.
+
+**The content after a write is what was sent, not necessarily what is
+stored.** Some servers rewrite what they store and still return a strong
+ETag for it (Radicale and Xandikos, found by calendaring-sync; RFC 4791
+§5.3.4 says they must not). The returned `etag` is kept, because it is
+what the next `If-Match` needs, but it may belong to content the item does
+not hold, and `changes()` will then never report the difference. A caller
+that needs the stored form, a sync tool in particular, calls `reload()`.
+`verify=True` only tells it that the server changed something
+([§5.3](#53-what-happens-when-the-caller-asks-for-something-unsupported)).
 
 **`complete`** is an I/O method because completing a recurring task may
 write two objects: caldav's "safe" mode completes a copy of the occurrence
@@ -543,7 +584,9 @@ Three concepts, following [survey 3.2](TASK_MODEL_SURVEY.md#32-dimension-by-dime
 
 Two capabilities say which applies: `identity.client-uid` (the backend
 stores the caller's UID as given) and `identity.foreign-id` (it can store it
-in a side slot and find the item by it). Gitea declares both `UNSUPPORTED`:
+in a side slot and find the item by it). A third, `identity.client-native-id`,
+says whether the caller may also choose the `native_id`
+(`add(native_id=...)`, [§2.3](#23-collection)). Gitea declares all three `UNSUPPORTED`:
 a task added with UID `abc` comes back with the synthesised one, and
 `get("abc")` raises `NotFoundError`. A caller that needs to recognise its
 own items there has to keep the mapping itself. This is the place where a
@@ -836,6 +879,7 @@ initial set:
 | `changes` | `changes()`: `FULL` with a native token, `EMULATED` by listing |
 | `write.conditional` | `FULL` with an atomic precondition (ETag, `content_version`); `EMULATED` read-compare-write |
 | `identity.client-uid`, `identity.foreign-id` | [§3.2 Identity](#32-identity) |
+| `identity.client-native-id` | `add(native_id=...)`: the caller may name the stored object (CalDAV href, vdir file name) |
 | `properties.passthrough` | unknown properties and components survive a round trip |
 | `recurrence`, `recurrence.edit-this-and-future` | stores `RRULE`; [§3.7 Recurrence](#37-recurrence) |
 | `move` | [§2.3 Collection](#23-collection) |
@@ -945,8 +989,9 @@ CalendaringError
 │   └── AuthorizationError        # 403
 ├── NotFoundError                 # also a LookupError
 ├── AmbiguousError                # a name matched several collections
-├── ConflictError                 # precondition failed: changed since read
-│   └── AlreadyExistsError        # add() with a UID already present
+├── ConflictError                 # a precondition failed; itself: changed since read
+│   ├── AlreadyExistsError        # add(): .taken is "uid" or "native_id"
+│   └── SyncTokenError            # changes(token): the backend can no longer honour the token
 ├── UnsupportedError              # carries .feature
 │   └── LossyWriteError           # carries .losses; raised before anything is sent
 ├── InvalidDataError              # the backend rejected the data, or it does not parse; also a ValueError
@@ -968,11 +1013,27 @@ CalendaringWarning
 - `RateLimitError` is raised, not retried. Retrying belongs to the
   hand-written per-mode layer ([roadmap 0.2](ROADMAP.md#02-syncasync-architecture): `asyncio.sleep` must not be in
   `_async/`), and whether it retries is a workspace option ([roadmap 1.4](ROADMAP.md#14-configuration-and-credentials)).
+- A `TransportError` during a write means the outcome is unknown: the
+  write may have been stored. It is never retried, whatever the retry
+  option says. The caller finds out with `reload()` after a `save`, with
+  `get_by_native_id()` after `add(native_id=...)`, and otherwise with
+  `get(uid)` where UIDs round-trip ([§3.2](#32-identity)).
+- `SyncTokenError` is raised whatever status the server used for an
+  expired or never-issued token: 403 with `DAV:valid-sync-token`, 412
+  (Xandikos), or a 500 from a server known to answer a bad token that way
+  (Xandikos and CCS, flagged by caldav's `sync-token.invalid-token`
+  feature). Only `changes(token)` raises it. Kept apart from a failed
+  `If-Match`, because the remedy differs: start again with `changes()`, not
+  reload the item. It is still a `ConflictError`, as `AlreadyExistsError`
+  is, because all three are a failed precondition; a handler that reloads
+  on `ConflictError` should catch the subclasses first.
 - Fan-out ([§2.1 Workspace](#21-workspace)) does not raise; `MultiResult.raise_for_errors()` raises an `ExceptionGroup` of these.
 
 caldav's errors map one to one where they overlap:
 `NotFoundError` → `NotFoundError`, `ETagMismatchError` and
-`ScheduleTagMismatchError` → `ConflictError`,
+`ScheduleTagMismatchError` → `ConflictError`; in `changes(token)`, a
+`DAVError` carrying the `DAV:valid-sync-token` precondition, any 412, and a
+500 from a server flagged as above → `SyncTokenError`;
 `AuthorizationError` → `AuthenticationError` or `AuthorizationError` by
 status code, `RateLimitError` → `RateLimitError`, other `DAVError` →
 `BackendError`.
@@ -991,8 +1052,15 @@ Adopts vdirsyncer's contract ([prior art §1.2, vdirsyncer](PRIOR_ART_AND_DECISI
 | files, vdir | `f"{st_mtime_ns};{st_ino}"` | `EMULATED`: compare, then atomic rename |
 | files, single `.ics` | hash of the item's serialisation | `EMULATED` |
 | feed | hash of the item's serialisation | n/a (read-only) |
-| JMAP | the object's state | per `calendaring-jmap` |
+| JMAP | hash of the item's JSCalendar object | `EMULATED` |
 | Gitea | `content_version`, plus `updated_at` | `FULL` for the body, `EMULATED` for the rest ([§10 Open questions](#10-open-questions), Q6) |
+
+JMAP has no per-object version. Its `state` covers every object of one
+data type in the account, so used as an etag it would mark every item
+changed after any write, and `ifInState` on `/set` is account-wide in the
+same way (RFC 8620 §5.1, §5.3; pointed out in the
+[PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4242767102)).
+Hence a hash, and a read-compare-write that can race.
 
 **Every collection answers `changes(token)`:**
 
@@ -1008,7 +1076,24 @@ cs = await cal.changes(cs.token)        # what changed since
 ```
 
 - CalDAV: RFC 6578 sync-token where the server supports it (`FULL`),
-  otherwise emulated by caldav from an ETag listing.
+  otherwise emulated by caldav from an ETag listing. `changes()` without a
+  token lists the members with `PROPFIND` and takes the token from the
+  collection's `DAV:sync-token` property (RFC 6578 §4), read before the
+  member listing or in the same `Depth: 1` request, so a change made in
+  between is reported again by the next `changes(token)` instead of lost;
+  not from a
+  `sync-collection` report with an empty token: Stalwart truncates that
+  report with a 507 and hands back its newest token, so following it loses
+  the rest of the calendar. The `PROPFIND` way worked on all five servers
+  calendaring-sync tests with
+  ([PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4242773257)).
+- JMAP: `CalendarEvent/changes` and `Task/changes` (RFC 8620 §5.2). Their
+  state covers the whole account and data type, not one calendar. A
+  collection keeps its own list of ids, carried in the token as for files.
+  It reports as changed the updated ids whose `calendarIds` include it, and
+  as deleted the ids on its list that were destroyed or no longer include
+  it: an event moved to another calendar comes back as updated, not
+  destroyed.
 - Files: the token is a compact encoding of `{native_id: etag}`; changes are a
   re-scan diffed against it (`EMULATED`).
 - Feed: HTTP `ETag`/`Last-Modified` short-circuits "nothing changed";
@@ -1023,8 +1108,19 @@ with one UID (calendaring-sync's design reached the same conclusion; see
 
 A token is valid only for the collection that issued it. A token the
 backend can no longer honour (CalDAV `valid-sync-token` precondition, a
-files token from a different directory) raises `ConflictError`, and the
-caller starts again with `changes()`.
+files token from a different directory) raises `SyncTokenError`, a
+`ConflictError` ([§6 Errors](#6-errors)), and the caller starts again with
+`changes()`.
+
+**A change set is always complete.** A truncated page (CalDAV 507, RFC 6578
+§3.6; JMAP `hasMoreChanges`) is followed inside `changes()`, which returns
+only when it has everything. So `ChangeSet` needs no "complete or
+truncated" flag, and no "full listing or incremental" flag either:
+`changes()` without a token is always a full listing, `changes(token)`
+always incremental, and an expired token raises rather than falling back to
+a listing. The cost is memory on a very large calendar. calendaring-sync
+keeps both flags in its own change set; an adapter built on this one sets
+them from the call it made.
 
 For Gitea, `updated_at` is the weakest change signal in the survey. The
 synthetic etag adds `content_version`, so "changed twice within the clock
@@ -1241,7 +1337,7 @@ For the author and for peer review. Each has a proposed answer; none blocks
     overlaps with [§7 Change detection](#7-change-detection) and with
     roadmap 2.1. Neither project can wait for the other, so the proposal is
     to share findings and keep the interfaces compatible:
-    - **caldav fixes both need.** The sync adapter works around caldav
+    - **caldav fixes both need.** The sync adapter worked around caldav
       dropping a truncated `sync-collection` page (RFC 6578 §3.6), losing a
       403's body (so `valid-sync-token` cannot be told from a permission
       error), `save()` bumping `SEQUENCE` unasked, and `delete()` sending no
@@ -1249,21 +1345,52 @@ For the author and for peer review. Each has a proposed answer; none blocks
       issues [737](https://github.com/python-caldav/caldav/issues/737),
       [738](https://github.com/python-caldav/caldav/issues/738),
       [739](https://github.com/python-caldav/caldav/issues/739) and
-      [740](https://github.com/python-caldav/caldav/issues/740).
+      [740](https://github.com/python-caldav/caldav/issues/740), fixed on
+      caldav master for 3.5.0; calendaring-sync has dropped its workarounds.
+      Still open in caldav, and needed here too: the precondition is read
+      only from 401/403 errors, so a 412 for an expired token arrives as a
+      plain `ReportError`, and a removed member in a sync result is an
+      object with no etag rather than marked as removed. Server side:
+      [xandikos#743](https://github.com/jelmer/xandikos/issues/743) (a 500
+      for a malformed token) and
+      [xandikos#730](https://github.com/jelmer/xandikos/issues/730) (the 412).
     - **One "calendaring" adapter later.** Our `Collection.changes()`,
       etags and conditional writes cover CalDAV, JMAP, files, feeds and
       Gitea. An adapter in calendaring-sync built on them would give it
-      every calendaring backend at once, so its adapter interface should
-      stay public and protocol-neutral.
-    - **Adopt their change-set findings here.** Removal by native id is
-      done (above). Still open: whether our `ChangeSet` should also say
-      "full listing or incremental" and "complete or truncated page", as
-      theirs does, and whether a write's returned etag can be trusted
-      (they found servers that rewrite stored data and still return one).
+      every calendaring backend at once; its adapter base class is public,
+      and its docs now say adapters may live outside the package. JMAP
+      would probably stay a native adapter there: it keeps JSCalendar
+      rather than iCalendar, and its scope is one account and data type, not
+      one calendar. The JSCalendar original stays reachable here as the
+      JMAP item's `.native` ([§8](#8-the-escape-hatch)).
+    - **Adopted from their findings:** removal by native id, `PROPFIND`
+      plus `DAV:sync-token` for a full CalDAV listing, a complete change set
+      with no flags, the untrusted etag after a write, `SyncTokenError`,
+      `AlreadyExistsError.taken`, `add(native_id=...)` and no retry of a
+      write ([§2.3](#23-collection), [§6](#6-errors),
+      [§7](#7-change-detection)).
+    - **Still open, needed for a cheap calendaring adapter:**
+      - *Raw content.* Their core stores what the server sent and pushes
+        what the app recorded; an item here holds a parsed
+        `icalendar.Calendar`, so they would get a re-serialisation.
+        Proposal: keep the wire bytes of an item that was read, and accept
+        raw bytes on write. Touches [§3.1](#31-the-base-a-typed-view-over-icalendar).
+      - *An etag-only listing.* After a token reset, `changes()` downloads
+        every item; they compare etags first and fetch only what changed.
+        Either `list_etags()`, `changes(None, known={native_id: etag})`, or
+        items that load lazily. Touches `ChangeSet`.
     - **Licence.** calendaring-sync is AGPL. An adapter living there may
       depend on calendaring; calendaring depending on calendaring-sync
       (for a `Mirror`) would have to be an optional extra, like JMAP
-      ([D3](PRIOR_ART_AND_DECISIONS.md#d3-licence)).
+      ([D3](PRIOR_ART_AND_DECISIONS.md#d3-licence)). Sashank has offered to
+      move calendaring-sync to this project's licence and unasync layout;
+      undecided.
+
+    Discussion: [the author's first comment](https://github.com/pycalendar/calendaring-sync/pull/19#issuecomment-6096220788),
+    [Sashank's answers](https://github.com/pycalendar/calendaring-sync/pull/19#issuecomment-6112378889),
+    [what is in the way of a calendaring adapter](https://github.com/pycalendar/calendaring-sync/pull/19#issuecomment-6114023463);
+    server evidence on calendaring-sync's
+    [`evidence` branch](https://github.com/pycalendar/calendaring-sync/tree/evidence).
 12. **Occurrence items: `delete()` and the shared etag**
     ([What an item contains](#what-an-item-contains)). Occurrences of one
     stored series share its `native_id` and `etag`, so the rules for a whole
@@ -1303,6 +1430,17 @@ For the author and for peer review. Each has a proposed answer; none blocks
     is sketched in the working document
     [WIP_ITEM_DELEGATION.md](WIP_ITEM_DELEGATION.md).
 
+    The reviewer also asked for edits spanning several calls, or several
+    items, to behave
+    [like a transaction](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6113054014).
+    Gather-and-flush gives the first half: nothing is written until the
+    flush. The other half is open: no backend here has a multi-object
+    transaction (CalDAV writes one resource per request, and JMAP `/set`
+    applies and reports each object on its own, RFC 8620 §5.3), so a flush
+    that fails halfway leaves some writes stored. A flush
+    would have to report which ones, as fan-out's `MultiResult` does
+    ([§2.1](#21-workspace)), rather than promise atomicity.
+
 ---
 
 ## 11. Peer review
@@ -1314,7 +1452,7 @@ so far: the item base class is `Item` and carries no iCalendar properties of
 its own ([§3.1](#31-the-base-a-typed-view-over-icalendar)); what an item may
 hold is spelled out ([What an item contains](#what-an-item-contains)); the
 occurrence merge goes to `recurring_ical_events` (Q3); and change tracking is
-open as Q13. His proposal of per-mode adapters (`item.sync.save()`) was
+open as Q13, now with his question about transactions. His proposal of per-mode adapters (`item.sync.save()`) was
 prototyped and not adopted
 ([sync/async §12](SYNC_ASYNC_ARCHITECTURE.md#12-revisited-the-adapter-pattern-2026-10-10)).
 He has asked for an in-person conversation about the object design. The
@@ -1330,7 +1468,14 @@ calendar.
 | a vdirsyncer/pimsync maintainer | [§7 Change detection](#7-change-detection) adopts their contract | [§7 Change detection](#7-change-detection) |
 
 What the author needs to do: decide whom to approach, and send this
-document, or [§10 Open questions](#10-open-questions) alone. The author has reviewed it; Q3 and Q11 still await him.
+document, or [§10 Open questions](#10-open-questions) alone. The author has reviewed it; Q3 and Q11 (the licence offer) still await him.
+
+Sashank (calendaring-sync) reviewed [§7 Change detection](#7-change-detection)
+from a sync tool's side on 2026-10-11, in PR 5 and in
+[calendaring-sync PR 19](https://github.com/pycalendar/calendaring-sync/pull/19).
+What it changed: the JMAP etag, the full CalDAV listing, complete change
+sets, `SyncTokenError`, the create clashes, no retried writes and the etag
+after a write ([§10](#10-open-questions), Q11).
 
 ---
 
