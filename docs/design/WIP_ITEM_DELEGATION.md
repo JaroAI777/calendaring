@@ -116,7 +116,9 @@ sketch:
 - **Two ways to write the same thing.** `task.summary` and
   `task.component.summary` would both work, but only the first is tracked
   straight away. The documentation has to choose one as the normal way and
-  call the other the escape hatch.
+  call the other the escape hatch. Renaming it `item._component` would make
+  the choice for the user, but it costs more than the name suggests; see
+  [§4, alternative D](#4-alternatives).
 - **Name collisions.** The item's own fields win. Today the only overlap is
   `uid` (read-only on the item, writable on the component), and there the
   item's behaviour is the right one. Any field added to `Item` or a subclass
@@ -142,13 +144,34 @@ sketch:
   that raises on anything that is not the item's own field. This closes the
   typo trap at almost no cost, but gives no tracking hook.
 - **C. Delegation (this document).**
-- **D. Delegation plus a generated typing stub.** C, with types restored by a
+- **D. Delegation with a private `_component`.** One spelling, and every
+  setter call is tracked. But:
+  - The only fully typed path goes away, so the typing drawback of §3 applies
+    to everything the user writes, not just to the short spelling.
+  - Delegation only reaches typed properties. Properties icalendar has no
+    accessor for (`PERCENT-COMPLETE`, `COMPLETED`, `ESTIMATED-DURATION`, all
+    read today with `component.get(...)`) and subcomponents would need another
+    public path, for instance `item["PERCENT-COMPLETE"]` delegated to the
+    component's `__getitem__`/`__setitem__`, which can also be tracked.
+  - `item.icalendar` (the whole `VCALENDAR`) is public too, and contains the
+    component. Hiding one while the other stays public only hides it halfway.
+    It would have to go read-only or private as well, which departs from
+    [D6](PRIOR_ART_AND_DECISIONS.md#d6-canonical-in-memory-model) and from the
+    escape hatch of [API_DESIGN §8](API_DESIGN.md#8-the-escape-hatch).
+  - In-place changes (`item.categories.append(...)`) still bypass the hook, so
+    the snapshot comparison is still needed.
+
+  If chosen, the leading underscore is the Python convention, and nothing
+  enforces it: `item._component.summary = x` still works.
+  Keeping `component` public and documenting it as the untracked escape hatch,
+  as `native` is, gets the same clarity without these costs.
+- **E. Delegation plus a generated typing stub.** C, with types restored by a
   `.pyi` / Protocol generated from icalendar. This brings back code
   generation, which the author already dislikes in unasync.
 
 Whatever is chosen, a `save()` that compares snapshots is the only thing that
-catches every change, including those A–D miss. So it belongs in the design
-in all four cases.
+catches every change, including those A–E miss. So it belongs in the design
+in all five cases.
 
 ## 5. Conclusion
 
