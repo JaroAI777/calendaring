@@ -314,6 +314,8 @@ therefore has a committed downstream consumer and should not be trimmed.
       maintainers: see [CONFIGURATION_PROPOSAL.md](CONFIGURATION_PROPOSAL.md)
 - [ ] Check existing conventions first — `caldav`, `plann`, `vdirsyncer`, `khal`, etc — rather
       than inventing a fifth format (probably build on the caldav format)
+- [ ] Leave room for backends beyond the funded ones without format changes:
+      GitHub first, then any plugin backend
 - [ ] Document the format
 
 ---
@@ -504,6 +506,9 @@ express this backend without contortion, the finding is more valuable than the c
 - [ ] Pass the conformance suite, with unsupported operations failing as specified
 - [ ] Write up what did not fit — this feeds the capability matrix (4.3) and any
       later API revision
+
+GitHub is the next tracker after this one, even though it is not funded (see
+[Beyond the funded scope](#beyond-the-funded-scope)). 0.1 did not survey it.
 
 ---
 
@@ -792,6 +797,7 @@ Everything below is in the README's ambition but **outside the 248 funded hours*
 | Mobilizon backend, bidirectional | 40–60 h | README calls this "quite high on my list"; federated event distribution, ActivityPub-based |
 | iTIP over email: sending `.ics` attachments | 16–24 h | RFC 5546; the sending half is much cheaper than the receiving half |
 | Mailbox access via IMAP and/or JMAP mail | 32–48 h | Reading invitations out of a mailbox; a different problem from calendar access |
+| GitHub issues backend | 12–16 h | **First priority after 2.5**, funded or not: the project's own issues live on GitHub. Proprietary and not self-hostable, so CI runs against recorded responses or a dedicated test repository. Issues are REST; Projects v2 fields (status, estimates) are GraphQL-only. No estimate, time log or priority on an issue, so it tests the capability declaration much as Gitea does |
 | Additional task-tracker backends | 12–20 h each | After 2.5 the marginal cost drops, but auth and pagination are per-tracker |
 | Emacs org-mode backend | 24–32 h | Parsing org is its own project; a subset may be tractable |
 | Plain Markdown task files | 8–16 h | Depends entirely on how much convention is assumed |
