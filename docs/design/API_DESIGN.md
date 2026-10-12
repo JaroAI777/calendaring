@@ -435,6 +435,7 @@ none), `add_event(...)` raises `UnsupportedError(Feature.COMPONENT_EVENT)`.
 class Item:
     icalendar: icalendar.Calendar       # the whole VCALENDAR, VTIMEZONEs included
     component: icalendar.Component      # the one that describes the item; see "What an item contains"
+                                        # (a tracked subclass of Todo/Event/Journal, §10 Q13)
 
     uid: str                            # read-only: component's UID; identity, see "Identity"
     native_id: str | None               # backend's own id; None until stored
@@ -571,7 +572,8 @@ Rules for bound items:
 Factories, which library users call instead of constructors:
 `Task.new(summary=..., end=..., **properties)`, `Task.from_ical(data)` (a
 string or bytes) and `Task.from_icalendar(calendar)` (an
-`icalendar.Calendar` already parsed). The `uid` defaults to a fresh UUID,
+`icalendar.Calendar` already parsed; the item stores a converted copy, so
+later changes to the caller's object do not reach it, §10 Q13). The `uid` defaults to a fresh UUID,
 as `icalendar.Todo.new` does. Bound items come only from a collection
 ([§1.1 Sync and async](#11-sync-and-async)).
 
@@ -1424,18 +1426,32 @@ For the author and for peer review. Each has a proposed answer; none blocks
     [p5 prototype](SYNC_ASYNC_ARCHITECTURE.md#12-revisited-the-adapter-pattern-2026-10-10)
     shows gather-and-flush working in both modes without duplicated I/O.
     Since the item has no properties of its own
-    ([§3.1](#31-the-base-a-typed-view-over-icalendar)), the notification
-    has to come from `icalendar`: a write through `item.component` would
-    otherwise go untracked. That has been asked of `icalendar`'s
-    maintainer. An alternative that needs nothing
-    from `icalendar`, delegating unknown item attributes to `component`,
-    is sketched in the working document
-    [WIP_ITEM_DELEGATION.md](WIP_ITEM_DELEGATION.md), together with a
-    second one built on
+    ([§3.1](#31-the-base-a-typed-view-over-icalendar)), a write through
+    `item.component` has to be seen there.
+
+    **How writes are tracked (decided 2026-10-12).** `component` becomes
+    this library's subclass of `icalendar.Todo` / `Event` / `Journal`,
+    which overrides `__setitem__`, `__delitem__`, `pop` and `update` to
+    mark the item dirty and notify the strategy. The typed path,
+    `task.component.summary = x`, is then also the tracked path, with no
+    property list repeated here and no loss of static types. Checked
+    against `icalendar` 7.3.1.dev188: every typed-property write tried
+    (`summary`, `status`, `DUE`, `DURATION`, `DTSTART`, `categories`,
+    `add()`, `del`) goes through those methods. What it needs from
+    `icalendar` is parsing into the subclass:
     [icalendar issue 1914](https://github.com/collective/icalendar/issues/1914)
-    (alternative F): `component` is a subclass of `icalendar.Todo` /
-    `Event` whose `__setitem__` and `pop` mark the item dirty, so the typed
-    path is also the tracked path.
+    proposes a `ComponentFactory` used for parsing and
+    `Component.convert_to(factory)`, which `Task.from_icalendar()` would
+    use on a caller's `Calendar` (a copy). `icalendar` would also have to
+    test and document that all writes go through those methods. Two gaps
+    remain: an in-place change (`task.component.categories.append(...)`)
+    calls no setter, so `save()` still compares a `to_ical()` snapshot as
+    the backstop; and a typo (`component.sumary = x`) is still accepted
+    silently. Rejected: delegating unknown item attributes to `component`
+    (`task.summary` would be `Any` to type checkers), with or without
+    renaming it `_component`, and a generated typing stub (code
+    generation). The comparison is in git history, as
+    `docs/design/WIP_ITEM_DELEGATION.md`.
 
     **Decided** in the
     [PR 5 video meeting](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6122366863)
@@ -1490,13 +1506,14 @@ so far: the item base class is `Item` and carries no iCalendar properties of
 its own ([§3.1](#31-the-base-a-typed-view-over-icalendar)); what an item may
 hold is spelled out ([What an item contains](#what-an-item-contains)); the
 occurrence merge goes to `recurring_ical_events` (Q3); and change tracking is
-Q13, now with his question about transactions. The video meeting of
+Q13, which has decided how writes are tracked (a tracked subclass of the
+`icalendar` components, pending icalendar issue 1914) and still has his
+question about transactions open. The video meeting of
 2026-10-12 kept `save()` and `reload()` explicit and moved implicit
 synchronization beyond the funded scope. His proposal of per-mode adapters (`item.sync.save()`) was
 prototyped and not adopted
 ([sync/async §12](SYNC_ASYNC_ARCHITECTURE.md#12-revisited-the-adapter-pattern-2026-10-10)).
-He has asked for an in-person conversation about the object design. The
-roadmap's warning applies: a review is a dependency on someone else's
+The roadmap's warning applies: a review is a dependency on someone else's
 calendar.
 
 | Reviewer (role) | Why | What to ask |
