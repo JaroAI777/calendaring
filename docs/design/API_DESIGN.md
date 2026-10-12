@@ -1398,7 +1398,7 @@ For the author and for peer review. Each has a proposed answer; none blocks
 8. **The configuration file is shared by caldav, calendaring-jmap and this
    library.** Where should its parser live? A proposal for the team is in
    [CONFIGURATION_PROPOSAL.md](CONFIGURATION_PROPOSAL.md).
-9. *Partly decided, 2026-10-10:* **One item, several backends** (the author's suggestion): an
+9. *Decided, 2026-10-12:* **One item, several backends** (the author's suggestion): an
    item that references a list of backends, so that `save()` or
    `complete()` pushes the change to all of them. It is a good feature, but
    it is a sync engine, not a reference:
@@ -1411,7 +1411,7 @@ For the author and for peer review. Each has a proposed answer; none blocks
      `MultiResult`, not a return value.
    - When the backends have diverged, which copy wins?
 
-   **Proposal:** no mirroring in 1.x. The conflict half
+   *Decided by the author, 2026-10-12:* no mirroring in 1.x. The conflict half
    belongs in [calendaring-sync](https://github.com/pycalendar/calendaring-sync),
    which is being designed now (Q11).
    *Decided by the author:* bound items hold their collections as a tuple
