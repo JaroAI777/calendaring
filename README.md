@@ -12,9 +12,16 @@ I've been the maintainer of the Python CalDAV client package for many years now.
 
 There exists no good standards for tasks.  There are some industry standards, except for that the iCalendar standard offers support for task lists, but it's not a very good standard for it.  For instance, it's not very clear how to add information about time estimates and time spent on a task.
 
-## What is it (going to be)?
+## Mission statement
 
-This is intended to be a general python client for accessing task and calendaring information from various sources.  Version 0.1.0 it won't be much more than a wrapper for the CalDAV library already - but it will provide a clean, general and well-documented interface, it will support a clean, general and well-documented configuration file, with the intention to support other backends and not only CalDAV servers.
+This is intended to be a general Python API for accessing task and calendaring information, regardless of where it's stored and how to access the backend.  In version 0.1.0 it won't be much more than a wrapper for the CalDAV library already - but it will provide a clean, general and well-documented interface, it will support a clean, general and well-documented configuration file, with the intention to support other backends and not only CalDAV servers.  In the future, support for JMAP, text files and other calendar-like or task-management software systems will be implemented.
+
+### Personal motivation
+
+* I feel that the combination of a lack of a good task list and "too many TODO-lists" has been a consistent pain for most of my life.
+* I would like to have all relevant tasks and calendar events open in front of me when planning my days, weeks and months regardless of where the tasks are stored.
+* I'd like to throw standardized attributes on my tasks and issues (like time spent, time estimate, priority, due-time) regardless of where they exist (this may involve synchronizing information from external systems with my own calendar/task store).  I do hope that this library can help me achieve this.
+* I have the `plann`-utility which is a CLI/frontend for CalDAV servers - but I'd like to use it towards other systems as well.
 
 ## Existing systems
 
