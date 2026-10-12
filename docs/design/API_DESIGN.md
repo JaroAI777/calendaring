@@ -1299,7 +1299,8 @@ For the author and for peer review. Each has a proposed answer; none blocks
 5. *Resolved, 2026-10-09:* assignees are `ATTENDEE`s with the tracker's
    profile URL as the calendar address; no `X-` property
    ([§3.4 Task](#34-task)).
-6. **Gitea's `content_version`** covers the issue body; whether it also
+6. *Deferred to roadmap 2.5, 2026-10-12:* answered once a Gitea test
+   server is up. **Gitea's `content_version`** covers the issue body; whether it also
    changes on label, state or due-date edits is checked in roadmap 2.5,
    against a Gitea run as a CI service container (the official image with
    SQLite needs a few hundred MB of RAM and no persistent host). This is a
