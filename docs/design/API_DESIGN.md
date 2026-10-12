@@ -76,6 +76,7 @@ Terms used before the section that defines them:
 | mode | sync or async. The async code is written by hand, the sync code generated from it by unasync |
 | `native_id` | the backend's own key for a stored item: a CalDAV href, a file name, an issue number ([§3.2](#32-identity)) |
 | `etag` | a value that changes whenever the stored item changes; the server's ETag, or one made up by the library ([§7](#7-change-detection)) |
+| `wire` | the stored object exactly as the backend returned it, bytes and all; kept beside the parsed item ([§3.1](#the-stored-form)) |
 | token, change set | `changes()` returns what changed (a `ChangeSet`) and a token to pass next time, to get what changed since ([§7](#7-change-detection)) |
 | capability, feature, support level | per collection, a table of what it can do (`Feature`) and how well (`FULL`, `LOSSY`, `EMULATED`, `UNSUPPORTED`, `UNKNOWN`) ([§5](#5-capabilities)) |
 | lossy write, loss policy | a write the backend can store only by changing or dropping a value; the loss policy says whether it raises, warns or goes ahead ([§5.3](#53-what-happens-when-the-caller-asks-for-something-unsupported)) |
@@ -315,12 +316,14 @@ class AsyncCollection:
 
     # writing
     async def add(self, item: Item, *, native_id: str | None = None,
+                  wire: bytes | None = None,
                   loss: LossPolicy | None = None,
                   verify: bool | None = None) -> AsyncItem: ...
     async def add_task(self, *, loss: LossPolicy | None = None, verify: bool | None = None, **properties: Any) -> AsyncTask: ...   # add(Task.new(**properties))
     async def add_event(self, *, loss: LossPolicy | None = None, verify: bool | None = None, **properties: Any) -> AsyncEvent: ...
     async def add_journal(self, *, loss: LossPolicy | None = None, verify: bool | None = None, **properties: Any) -> AsyncJournal: ...
     async def save(self, item: Item, *, overwrite: bool = False, scope: Scope = Scope.THIS,
+                   wire: bytes | None = None,
                    loss: LossPolicy | None = None, verify: bool | None = None) -> AsyncItem: ...
                    # scope: occurrences only, see "Recurrence"; verify: see "What happens when ... unsupported"
     async def delete(self, item: Item | str, *, overwrite: bool = False) -> None: ...
@@ -344,7 +347,8 @@ class AsyncCollection:
     def bind(self, item: Item) -> AsyncItem: ...
 
     # change detection
-    async def changes(self, token: SyncToken | None = None) -> ChangeSet[AsyncItem]: ...
+    async def changes(self, token: SyncToken | None = None, *,
+                      known: Mapping[str, str] | None = None) -> ChangeSet[AsyncItem]: ...
 
     async def set_name(self, name: str) -> None: ...      # collection.set-name; updates self.name
     async def delete_collection(self) -> None: ...
@@ -378,6 +382,31 @@ before any I/O. `AlreadyExistsError.taken` says which clash it was:
 `no-uid-conflict` precondition: another object holds the UID). A sync tool
 handles the two differently. *Asked for by calendaring-sync
 ([PR 19](https://github.com/pycalendar/calendaring-sync/pull/19#issuecomment-6114023463)).*
+
+**`wire=` sends given bytes instead of a serialisation.** `add(item,
+wire=data)` and `save(item, wire=data)` send `data` exactly, where a
+plain write would send `item.icalendar.to_ical()`; what the server then
+stores may still differ (see "The content after a write" below). Identity
+and precondition come from where they always do: on `add`, from
+`native_id=` and `If-None-Match`; on `save`, from the item's `native_id`
+and `etag`. The library parses `data`, and before any I/O raises
+`ValueError` if its `UID` or component type differs from the item's, or if
+the item is a single occurrence (the bytes would be a whole stored object, or a merge
+input; [§3.7](#37-recurrence)). The capability and loss checks run on what
+it parsed, so `wire=` is no way around them; and since nothing is mapped,
+a value the backend could only store `LOSSY` raises
+`UnsupportedError(Feature.WRITE_WIRE)`: there is no loss to decide on,
+only bytes the backend cannot take as they are. The returned item holds what `data` parses to.
+It is for a caller that keeps bytes of its own, a sync tool pushing what
+an application recorded: parsing and re-serialising would change the
+bytes it compares later. Where a backend stores no iCalendar text per
+item (a single `.ics` file, a feed, JMAP, Gitea) the write raises
+`UnsupportedError(Feature.WRITE_WIRE)` before any I/O. `wire=` is on the
+collection's `add` and `save` only: a bound item's `save()` writes the
+item as it is.
+*Asked for by calendaring-sync
+([PR 19](https://github.com/pycalendar/calendaring-sync/pull/19#issuecomment-6114023463));
+proposal, open to review.*
 
 **Collection writes return the written item; bound methods update in
 place.** `collection.save(item)` and the other collection writes return a new
@@ -440,6 +469,7 @@ class Item:
     uid: str                            # read-only: component's UID; identity, see "Identity"
     native_id: str | None               # backend's own id; None until stored
     etag: str | None                    # real or synthetic (see "Change detection"); None until stored
+    wire: bytes | None                  # read-only: the stored object as read; see "The stored form"
     collection_id: str | None
     native: object | None               # see "The escape hatch"
     is_occurrence: bool                 # True when the item is one occurrence, not the whole stored object
@@ -479,6 +509,37 @@ backend state (above), `is_occurrence`, and on a task the native values of
 [§3.6](#36-properties-with-no-standard-home). There is one source of truth,
 so properties the library does not know about survive a round trip
 untouched (a conformance test proposed in [prior art Part 2](PRIOR_ART_AND_DECISIONS.md#part-2-standards)).
+
+#### The stored form
+
+`wire` holds the stored object exactly as the backend returned it when the
+item was read: the body of a CalDAV `GET`, the `calendar-data` of a
+`calendar-query` or `calendar-multiget` response, the content of a vdir
+file. On CalDAV that means the raw response body, which `caldav` does not
+keep today: it runs incoming data through `vcal.fix()`, and its
+`wire_data` re-encodes that normalised copy. The CalDAV backend has to
+capture the body itself, or wait for `caldav` to keep it
+([caldav issue 763](https://github.com/python-caldav/caldav/issues/763)). It belongs to `etag`, and like `etag` it is a snapshot: an edit to
+`component` does not change it, and a write sets it to `None`, because
+what the server stores may differ from what was sent (see "The content
+after a write" in [§2.3](#23-collection)); `reload()` reads it again.
+`copy()` and `as_data()` keep it, as they keep `etag`; equality ignores it.
+
+It is `None` where no bytes are this item's alone: on a data item made
+from scratch; on a single occurrence, which is one component of a stored
+object (and on anything the server expanded, which is generated data under
+the stored object's ETag); and on backends that store no object of their
+own iCalendar text per item (a single `.ics` file, a feed, JMAP, Gitea).
+
+This keeps [D6](PRIOR_ART_AND_DECISIONS.md#d6-canonical-in-memory-model):
+`icalendar` is still the storage, and nothing reads properties from
+`wire`. It is there for a caller that has to compare or keep what the
+server sent, a sync tool fingerprinting stored objects in particular, which
+a re-serialisation would defeat: `to_ical()` normalises line folding,
+property order and parameter quoting. Writing given bytes is `wire=` on
+[`add` and `save`](#23-collection). *Asked for by calendaring-sync
+([PR 19](https://github.com/pycalendar/calendaring-sync/pull/19#issuecomment-6114023463));
+proposal, open to review.*
 
 #### What an item contains
 
@@ -883,6 +944,8 @@ initial set:
 | `collection.set-name` | `set_name()` |
 | `search.server-side`, `search.time-range`, `search.text` | how much the server filters; never affects results ([§4 Search](#4-search)) |
 | `changes` | `changes()`: `FULL` with a native token, `EMULATED` by listing |
+| `changes.known` | `changes(known=...)` fetches only what changed: `FULL` where etags can be listed without content (CalDAV, vdir), `EMULATED` where everything is read and compared (JMAP, single `.ics` file, feed, Gitea) |
+| `write.wire` | `add(wire=...)`, `save(wire=...)`: given bytes are sent as they are; `FULL` on CalDAV and vdir, `UNSUPPORTED` elsewhere |
 | `write.conditional` | `FULL` with an atomic precondition (ETag, `content_version`); `EMULATED` read-compare-write |
 | `identity.client-uid`, `identity.foreign-id` | [§3.2 Identity](#32-identity) |
 | `identity.client-native-id` | `add(native_id=...)`: the caller may name the stored object (CalDAV href, vdir file name) |
@@ -1073,8 +1136,8 @@ Hence a hash, and a read-compare-write that can race.
 ```python
 @dataclass(frozen=True)
 class ChangeSet(Generic[T]):            # outside _async/; T is the bound item class of the mode
-    changed: list[T]                    # new or modified since token, bound to the collection
-    deleted: list[str]                  # native ids (CalDAV: hrefs); a removal report names no UID
+    changed: list[T]                    # new or modified since token (or known), bound to the collection
+    deleted: list[str]                  # native ids (CalDAV: hrefs) removed since token (or from known); a removal report names no UID
     token: SyncToken                    # SyncToken = NewType("SyncToken", str); opaque, persist it and pass it back
 
 cs = await cal.changes()                # everything, plus a token
@@ -1118,13 +1181,32 @@ files token from a different directory) raises `SyncTokenError`, a
 `ConflictError` ([§6 Errors](#6-errors)), and the caller starts again with
 `changes()`.
 
+**A full listing can skip what the caller already has.** `changes(known=
+{native_id: etag})` is a full listing compared with what the caller holds:
+`changed` has the items that are new or whose etag differs, and only those
+are fetched; `deleted` has the ids in `known` that are gone; every other id
+in `known` is unchanged. It returns a token like any other call. Without
+`known`, `changes()` reports every item as changed, as above. On CalDAV the
+listing is the `PROPFIND` above, with `DAV:getetag`, and only the changed
+members are fetched, in one `calendar-multiget` (RFC 4791 §7.9), so a token
+reset downloads what changed rather than the whole calendar. `known` with
+a token raises `ValueError`: an incremental report has its own baseline.
+Etags the caller got back from its own writes may belong to content the
+server rewrote (see "The content after a write" in [§2.3](#23-collection)), so
+`known=` built from them will not report the rewrite.
+*Asked for by calendaring-sync, whose full listing works this way
+([PR 19](https://github.com/pycalendar/calendaring-sync/pull/19#issuecomment-6114023463));
+proposal, open to review.*
+
 **A change set is always complete.** A truncated page (CalDAV 507, RFC 6578
 §3.6; JMAP `hasMoreChanges`) is followed inside `changes()`, which returns
 only when it has everything. So `ChangeSet` needs no "complete or
 truncated" flag, and no "full listing or incremental" flag either:
 `changes()` without a token is always a full listing, `changes(token)`
 always incremental, and an expired token raises rather than falling back to
-a listing. The cost is memory on a very large calendar. calendaring-sync
+a listing. A listing with `known` is complete too, but as a difference: an
+adapter that treats a full listing as "anything not mentioned is gone" must
+read `known` minus `deleted` as still there. The cost is memory on a very large calendar. calendaring-sync
 keeps both flags in its own change set; an adapter built on this one sets
 them from the call it made.
 
@@ -1159,7 +1241,9 @@ not a live handle.
 
 The other direction also works: `collection.wrap(native_item)` turns a
 backend object (a `caldav.Todo`, say) into this library's item, bound to
-that collection, without I/O. Together with `.native` that lets code use both libraries side by side,
+that collection, without I/O; `wire` stays `None` for a `caldav` object,
+whose `wire_data` is its normalised copy rather than the server's bytes
+(see "The stored form" in [§3.1](#31-the-base-a-typed-view-over-icalendar)). Together with `.native` that lets code use both libraries side by side,
 which is what a migration needs
 ([§9 Migrating from caldav](#9-migrating-from-caldav)).
 
@@ -1187,7 +1271,7 @@ caldav's public API as of 2026-10-08 (caldav 3.4.0).
 | `multiget()`, `load_by_multiget()` | used inside the backend | not a public call |
 | `icalendar_instance`, `edit_icalendar_component()` (borrowing) | `item.icalendar`, `item.component` | simpler: the item is the iCalendar data, nothing to borrow |
 | `vobject_instance` | — | escape hatch (`item.native.vobject_instance`) |
-| `data`, `wire_data` | `item.icalendar.to_ical()` | same |
+| `data`, `wire_data` | `item.wire` (as read), `item.icalendar.to_ical()` (as it is now) | changed: `wire` is the server's bytes as read, not caldav's normalised copy, and set to `None` by a write |
 | `search(expand=True)` | `search(expand=True)` | same |
 | `search(expand=True, split_expanded=False)` | — | dropped: an item is never several occurrences without their master ([§3.1](#what-an-item-contains)) |
 | `save(only_this_recurrence=True)` (default) | `save(occurrence)` | same ([§3.7 Recurrence](#37-recurrence)) |
@@ -1382,16 +1466,13 @@ For the author and for peer review. Each has a proposed answer; none blocks
       `AlreadyExistsError.taken`, `add(native_id=...)` and no retry of a
       write ([§2.3](#23-collection), [§6](#6-errors),
       [§7](#7-change-detection)).
-    - **Still open, needed for a cheap calendaring adapter:**
-      - *Raw content.* Their core stores what the server sent and pushes
-        what the app recorded; an item here holds a parsed
-        `icalendar.Calendar`, so they would get a re-serialisation.
-        Proposal: keep the wire bytes of an item that was read, and accept
-        raw bytes on write. Touches [§3.1](#31-the-base-a-typed-view-over-icalendar).
-      - *An etag-only listing.* After a token reset, `changes()` downloads
-        every item; they compare etags first and fetch only what changed.
-        Either `list_etags()`, `changes(None, known={native_id: etag})`, or
-        items that load lazily. Touches `ChangeSet`.
+    - **Proposed for a cheap calendaring adapter, open to review:** the
+      stored bytes of an item that was read (`Item.wire`) and writes of
+      given bytes (`wire=`), since their core stores what the server sent
+      and pushes what the application recorded
+      ([§3.1](#the-stored-form)); and `changes(known=...)`, a full listing
+      that fetches only what changed, as theirs does after a token reset
+      ([§7](#7-change-detection)).
     - **Licence.** calendaring-sync is AGPL. An adapter living there may
       depend on calendaring; calendaring depending on calendaring-sync
       (for a `Mirror`) would have to be an optional extra, like JMAP

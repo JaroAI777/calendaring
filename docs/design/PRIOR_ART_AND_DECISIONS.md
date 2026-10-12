@@ -50,6 +50,8 @@ and EteSync 1.0 and 2.0.
 **What to take from it:**
 - The *shape* is right: backends talk `icalendar` objects, and the front end
   never sees the wire format. That supports [D6](#d6-canonical-in-memory-model).
+  (Our items do expose the stored bytes, read-only, for sync tools:
+  [API_DESIGN §3.1, "The stored form"](API_DESIGN.md#the-stored-form).)
 - The *cache-then-sync* model (edit an in-memory list, call `sync()` to write
   it back) is exactly what a local-file backend (2.2) needs, and exactly wrong
   for CalDAV. icalcli handles the mismatch with `sync_after_edit`. That flag is
