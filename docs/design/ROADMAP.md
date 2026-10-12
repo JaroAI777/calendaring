@@ -795,6 +795,7 @@ Everything below is in the README's ambition but **outside the 248 funded hours*
 | jCal (RFC 7265) and xCal (RFC 6321) representations | 16–24 h | Format work, not backend work |
 | Proprietary systems | unbounded | README's position: pull requests welcome, no effort committed |
 | Completing the `plann` migration | 24–40 h | 3.3 buys evidence; this buys the migration |
+| Implicit synchronization | unknown | Edits reach the backends without an explicit `save()`; change tracking and write strategies, [API_DESIGN Q13](API_DESIGN.md#10-open-questions). Agreed in the [PR 5 video meeting](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6122366863): wanted, but not a priority. The funded API keeps `save()` and `reload()` explicit |
 
 ---
 

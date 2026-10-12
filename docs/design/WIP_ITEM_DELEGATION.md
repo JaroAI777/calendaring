@@ -168,10 +168,27 @@ sketch:
 - **E. Delegation plus a generated typing stub.** C, with types restored by a
   `.pyi` / Protocol generated from icalendar. This brings back code
   generation, which the author already dislikes in unasync.
+- **F. A tracked component subclass** (added 2026-10-12). No delegation:
+  `component` is our subclass of `icalendar.Todo` / `Event` /
+  `Journal` that overrides `__setitem__`, `__delitem__`, `pop` and
+  `update` to mark the item dirty. Checked against icalendar
+  7.3.1.dev188: every typed-property write seen so far goes through those
+  (`summary`, `status`, `DUE`, `DURATION`, `DTSTART`, `categories`,
+  `add()`, `del`); `categories.append()` does not, as in C. So
+  `task.component.summary = x` is both typed and tracked, and A's typing
+  and C's hook no longer exclude each other. What is missing is that
+  parsing returns plain `icalendar.Todo`;
+  [icalendar issue 1914](https://github.com/collective/icalendar/issues/1914)
+  proposes a `ComponentFactory` used for parsing plus
+  `Component.convert_to(factory)`, which is exactly that. Costs: it relies
+  on all writes going through those methods, an implementation detail
+  that icalendar would have to test and document; it does not close the
+  typo trap (B on the subclass can); and the snapshot backstop is still
+  needed.
 
 Whatever is chosen, a `save()` that compares snapshots is the only thing that
-catches every change, including those A–E miss. So it belongs in the design
-in all five cases.
+catches every change, including those A–F miss. So it belongs in the design
+in all six cases.
 
 ## 5. Conclusion
 

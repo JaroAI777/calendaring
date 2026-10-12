@@ -493,6 +493,9 @@ these three:
 | a full recurrence set | the master (`RRULE` or `RDATE`) and all its overridden occurrences, if any | the master | `False` | absent | 110, 011 |
 | a single occurrence | one component: a generated occurrence, or an override | that occurrence | `True` | set | 101 |
 
+**On a full recurrence set, `component` is the master only.** A write
+through it does not reach the overrides; see [§10](#10-open-questions), Q14.
+
 **A single occurrence is part of a stored object, not all of it.** The
 stored object may also hold the master and other overrides that the item
 does not carry. Occurrences come from three places:
@@ -1424,11 +1427,22 @@ For the author and for peer review. Each has a proposed answer; none blocks
     ([§3.1](#31-the-base-a-typed-view-over-icalendar)), the notification
     has to come from `icalendar`: a write through `item.component` would
     otherwise go untracked. That has been asked of `icalendar`'s
-    maintainer. Until then, `save()` stays explicit and is the primitive
-    any such layer would be built on. An alternative that needs nothing
+    maintainer. An alternative that needs nothing
     from `icalendar`, delegating unknown item attributes to `component`,
     is sketched in the working document
-    [WIP_ITEM_DELEGATION.md](WIP_ITEM_DELEGATION.md).
+    [WIP_ITEM_DELEGATION.md](WIP_ITEM_DELEGATION.md), together with a
+    second one built on
+    [icalendar issue 1914](https://github.com/collective/icalendar/issues/1914)
+    (alternative F): `component` is a subclass of `icalendar.Todo` /
+    `Event` whose `__setitem__` and `pop` mark the item dirty, so the typed
+    path is also the tracked path.
+
+    **Decided** in the
+    [PR 5 video meeting](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6122366863)
+    (2026-10-12): the funded API has explicit `save()` and `reload()`, and
+    `save()` is the primitive any later layer is built on. Implicit
+    synchronization is wanted, but is not a priority and is
+    [beyond the funded scope](ROADMAP.md#beyond-the-funded-scope).
 
     The reviewer also asked for edits spanning several calls, or several
     items, to behave
@@ -1440,6 +1454,30 @@ For the author and for peer review. Each has a proposed answer; none blocks
     that fails halfway leaves some writes stored. A flush
     would have to report which ones, as fan-out's `MultiResult` does
     ([§2.1](#21-workspace)), rather than promise atomicity.
+14. **Writing through `component` on a recurrence set with overrides.**
+    `item.component.summary = x` does what it says on a non-recurring
+    item, on a single occurrence, and on a series without overrides. On a
+    full recurrence set with overrides ([What an item contains](#what-an-item-contains))
+    `component` is the master, and each override is a whole component that
+    RFC 5545 uses *instead of* the generated occurrence. So the write
+    renames the series except for the overridden occurrences, which keep
+    the old summary. Moving the master's `DTSTART` is worse: the overrides'
+    `RECURRENCE-ID`s no longer match a generated occurrence. Nothing
+    raises, and the result looks right until someone opens one of the
+    overridden occurrences.
+    [`ical`](PRIOR_ART_AND_DECISIONS.md#13-ical-allen-porter) avoids this
+    by not editing in place: `store.edit(uid, patch, recurrence_id,
+    recurrence_range)` takes a partial item holding only the changed
+    fields. Without a `recurrence_id`, the patch goes to every component
+    with that `UID`, the master and all overrides. With one, it forks an
+    override (`Range.NONE`) or ends the series with `UNTIL` and starts a
+    new one (`THIS_AND_FUTURE`). Options here: document the trap; a
+    patch-style series edit like `ical`'s, which by
+    [D1](PRIOR_ART_AND_DECISIONS.md#d1-packaging-principle) would belong in
+    `recurring_ical_events` (Q3); or have `save()` warn when the master
+    changed and the stored object has overrides. A tracked `component`
+    (Q13, alternative F) would let `save()` see *which* properties changed,
+    which a patch-style merge needs.
 
 ---
 
@@ -1452,7 +1490,9 @@ so far: the item base class is `Item` and carries no iCalendar properties of
 its own ([§3.1](#31-the-base-a-typed-view-over-icalendar)); what an item may
 hold is spelled out ([What an item contains](#what-an-item-contains)); the
 occurrence merge goes to `recurring_ical_events` (Q3); and change tracking is
-open as Q13, now with his question about transactions. His proposal of per-mode adapters (`item.sync.save()`) was
+Q13, now with his question about transactions. The video meeting of
+2026-10-12 kept `save()` and `reload()` explicit and moved implicit
+synchronization beyond the funded scope. His proposal of per-mode adapters (`item.sync.save()`) was
 prototyped and not adopted
 ([sync/async §12](SYNC_ASYNC_ARCHITECTURE.md#12-revisited-the-adapter-pattern-2026-10-10)).
 He has asked for an in-person conversation about the object design. The
