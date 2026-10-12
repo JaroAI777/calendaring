@@ -408,8 +408,8 @@ interval after the actual completion" (org-mode's `.+1w`). That reads into
 follows the `RRULE`, and the interval-from-completion behaviour applies only
 when an `X-` property asks for it
 ([recurring-ical-events issue 292](https://github.com/niccokunzmann/python-recurring-ical-events/issues/292)).
-Where that logic should live is
-[§10 Open questions](#10-open-questions), Q3.
+The `icalendar` manipulation goes to `recurring_ical_events`, and the I/O
+stays here ([§10 Open questions](#10-open-questions), Q3).
 
 **`relatives`** fetches the objects an item's `RELATED-TO` points at (and,
 for `PARENT`, the children pointing back), as caldav's `get_relatives()`
@@ -748,9 +748,9 @@ that stores `RRULE` (`recurrence` capability). Backends that do not
 
 **Not supported: "this and future" for events**, which splits a series in
 two. caldav does not offer it either, `ical`'s `store.py` is the reference
-for it ([prior art §1.3, `ical`](PRIOR_ART_AND_DECISIONS.md#13-ical-allen-porter)),
-and by [D1](PRIOR_ART_AND_DECISIONS.md#d1-packaging-principle) it may belong in the recurring-ical-events package ([§10 Open questions](#10-open-questions), Q3, and [issue 292](https://github.com/niccokunzmann/python-recurring-ical-events/issues/292)). `save(occurrence, scope=Scope.THIS_AND_FUTURE)` raises
-`UnsupportedError(Feature.RECURRENCE_EDIT_THIS_AND_FUTURE)` until it supports it.
+for it ([prior art §1.3, `ical`](PRIOR_ART_AND_DECISIONS.md#13-ical-allen-porter));
+by [D1](PRIOR_ART_AND_DECISIONS.md#d1-packaging-principle) it does not belong in `caldav`, and it is assumed to go to [edit-icalendar](https://github.com/pycalendar/edit-icalendar) (a draft) ([§10 Open questions](#10-open-questions), Q3). `save(occurrence, scope=Scope.THIS_AND_FUTURE)` raises
+`UnsupportedError(Feature.RECURRENCE_EDIT_THIS_AND_FUTURE)` until that package can split a series.
 
 **Completing one occurrence of a recurring task** is `task.complete(mode=...)`
 ([§2.3 Collection](#23-collection)), with caldav's two modes, `safe` and
@@ -760,8 +760,9 @@ up `_complete_recurring_<mode>`, and that method is spelled
 `_complete_recurring_thisandfuture`. The CalDAV backend passes the working
 spelling, and the mismatch is reported as
 [caldav issue 735](https://github.com/python-caldav/caldav/issues/735).)
-Where that code should live is
-[§10 Open questions](#10-open-questions), Q3.
+Completing the occurrence is `icalendar` manipulation, which goes to
+`recurring_ical_events`; fetching and storing stay here
+([§10 Open questions](#10-open-questions), Q3).
 
 [§9 Migrating from caldav](#9-migrating-from-caldav) compares the whole of
 caldav's API with this one.
@@ -1267,13 +1268,14 @@ For the author and for peer review. Each has a proposed answer; none blocks
 
    **Proposal: `Workspace`**, accepted by the author and applied
    throughout.
-3. **Where recurring-task completion lives.** caldav's `complete(handle_rrule=…)`
+3. *Decided, 2026-10-10:* **Where recurring-task completion lives.** caldav's `complete(handle_rrule=…)`
    logic, and the occurrence merge behind `save(only_this_recurrence=…)`,
    are not CalDAV protocol logic, and by [D1](PRIOR_ART_AND_DECISIONS.md#d1-packaging-principle)
    do not belong in `caldav`. The files backend needs them too. The author
    does not want another package for a few hundred lines, and suggested
    `recurring_ical_events`, which already documents editing one occurrence;
-   its maintainer asked for an issue with a proposed API. **Proposal:**
+   its maintainer asked for an issue with a proposed API. Where the code
+   lives is decided (below); the API itself is still open, in
    [recurring-ical-events issue 292](https://github.com/niccokunzmann/python-recurring-ical-events/issues/292). Until it is settled, roadmap 2.1
    calls caldav's code, and roadmap 2.2 waits for the outcome rather than
    copying it. That means the CalDAV backend keeps caldav's "interval after
@@ -1286,7 +1288,12 @@ For the author and for peer review. Each has a proposed answer; none blocks
    an override in a recurrence set, completing one occurrence) goes to
    `recurring_ical_events` as `icalendar` manipulation with no I/O. Working
    out that `save(occurrence)` needs a merge, and fetching the stored
-   object to merge into, stays here, because it is I/O.
+   object to merge into, stays here, because it is I/O. Splitting a series
+   ("this and future" for events) is not part of that agreement; it is
+   assumed to go to [edit-icalendar](https://github.com/pycalendar/edit-icalendar),
+   a draft as of 2026-10-12 ([§3.7](#37-recurrence)). Its README also
+   covers editing and deleting single occurrences, so the merge above may
+   move there too, despite "no extra package" earlier in this question.
 4. *Decided, 2026-10-10:* **`verify=True`** on writes is in from the first
    release ([§5.3 What happens when the caller asks for something unsupported](#53-what-happens-when-the-caller-asks-for-something-unsupported)).
 5. *Resolved, 2026-10-09:* assignees are `ATTENDEE`s with the tracker's
@@ -1525,7 +1532,7 @@ calendar.
 | a vdirsyncer/pimsync maintainer | [§7 Change detection](#7-change-detection) adopts their contract | [§7 Change detection](#7-change-detection) |
 
 What the author needs to do: decide whom to approach, and send this
-document, or [§10 Open questions](#10-open-questions) alone. The author has reviewed it; Q3 and Q11 (the licence offer) still await him.
+document, or [§10 Open questions](#10-open-questions) alone. The author has reviewed it; Q11 (the licence offer) still awaits him.
 
 Sashank (calendaring-sync) reviewed [§7 Change detection](#7-change-detection)
 from a sync tool's side on 2026-10-11, in PR 5 and in
