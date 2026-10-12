@@ -810,7 +810,7 @@ that stores `RRULE` (`recurrence` capability). Backends that do not
 **Not supported: "this and future" for events**, which splits a series in
 two. caldav does not offer it either, `ical`'s `store.py` is the reference
 for it ([prior art §1.3, `ical`](PRIOR_ART_AND_DECISIONS.md#13-ical-allen-porter));
-by [D1](PRIOR_ART_AND_DECISIONS.md#d1-packaging-principle) it does not belong in `caldav`, and it is assumed to go to [edit-icalendar](https://github.com/pycalendar/edit-icalendar) (a draft) ([§10 Open questions](#10-open-questions), Q3). `save(occurrence, scope=Scope.THIS_AND_FUTURE)` raises
+by [D1](PRIOR_ART_AND_DECISIONS.md#d1-packaging-principle) it does not belong in `caldav`, and it is assumed to go to [edit-icalendar](https://github.com/pycalendar/edit-icalendar) (a draft) ([§10 Open questions](#10-open-questions), Q3). edit-icalendar is AGPL-3.0 and will be a hard dependency anyway, which is why an AGPL licence for this whole library is being considered ([D3](PRIOR_ART_AND_DECISIONS.md#d3-licence)). `save(occurrence, scope=Scope.THIS_AND_FUTURE)` raises
 `UnsupportedError(Feature.RECURRENCE_EDIT_THIS_AND_FUTURE)` until that package can split a series.
 
 **Completing one occurrence of a recurring task** is `task.complete(mode=...)`

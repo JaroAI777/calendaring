@@ -438,6 +438,16 @@ Consequences:
 - The licence files, `COPYING.GPL` and `COPYING.APACHE` as in `caldav`, were
   added on 2026-10-05; 1.5 lists them in `license-files`.
 
+**Under reconsideration (author, 2026-10-12): AGPL-3.0-or-later for the whole
+library.** [edit-icalendar](https://github.com/pycalendar/edit-icalendar),
+where splitting a series ("this and future") is assumed to go
+([API spec §3.7](API_DESIGN.md#37-recurrence)), is AGPL-3.0 and will be a
+hard dependency even so. That makes every installation contain AGPL code,
+as `icalendar-searcher` did before its relicensing, and the Apache-2.0
+option above becomes theoretical again. Whether edit-icalendar changes its
+licence is asked in [its issue 5](https://github.com/pycalendar/edit-icalendar/issues/5).
+Until that is settled, nothing above changes.
+
 ### D4. Python version floor
 
 What the ecosystem uses today: `caldav`, `icalendar`, `icalendar-searcher`,
