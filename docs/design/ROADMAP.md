@@ -212,7 +212,7 @@ prototyping.
 - **Estimated effort:** 20 hours
 - **Dependencies:** 0.1, 0.2, 0.3
 - **Deliverable:** a documented API specification, peer-reviewed —
-  [API_DESIGN.md](API_DESIGN.md) (drafted 2026-10-08, reviewed by the author; peer review not started)
+  [API_DESIGN.md](API_DESIGN.md) (drafted 2026-10-08; peer-reviewed in [PR 5](https://github.com/pycalendar/calendaring/pull/5) and in video calls, 2026-10-10 – 2026-10-13)
 
 The API should feel familiar to caldav users without being a CalDAV API in
 disguise. The test of the design is not "does it fit CalDAV" but "does it fit
@@ -233,7 +233,7 @@ CalDAV *and* a Gitea issue tracker without lying about either".
       without the abstraction pretending it does not exist
 - [x] Incorporate the task model from 0.1; fields with no standard property
       are stored as `X-` properties (0.3, D6)
-- [ ] Peer review, and revise. Identify and approach reviewers early — a review
+- [x] Peer review, and revise. Identify and approach reviewers early — a review
       is a dependency on someone else's calendar, not a quantity of work.
 
 ---

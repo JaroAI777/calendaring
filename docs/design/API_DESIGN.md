@@ -192,13 +192,15 @@ disagree. *Decided by the author, 2026-10-10.*
 unasync's default `AsyncX` → `SyncX` rename produces the sync ones with no
 replacement-map entry.
 
-**A naming asymmetry, open for review.** The I/O classes follow httpx: the
+**A naming asymmetry, accepted.** The I/O classes follow httpx: the
 sync one is unprefixed (`Collection` / `AsyncCollection`). For items, the
 unprefixed name goes to the data class, and the sync bound class is
 `SyncTask`. A reader who generalises from `Collection` will take `Task` to
 be the sync bound class, and `AsyncTask` also reads like `asyncio.Task`.
-The alternative is `TaskData` for the data class and `Task` / `AsyncTask`
-for the bound ones, at one replacement-map entry per class
+The rejected alternative was `TaskData` for the data class and `Task` /
+`AsyncTask` for the bound ones, at one replacement-map entry per class.
+*Decided by the author after peer review, 2026-10-13:* `Item` / `SyncItem`
+/ `AsyncItem`, and likewise for each item type
 ([§10 Open questions](#10-open-questions), Q10).
 
 **Mirroring one item to several backends** is
@@ -1421,12 +1423,14 @@ For the author and for peer review. Each has a proposed answer; none blocks
    comes, but `etag`, `native_id`, `collection_id` and (on Gitea) `uid` are
    singular today and per backend then (first bullet above), so mirroring
    will change those parts of the API.
-10. **Item class names** ([§1.1 Sync and async](#11-sync-and-async)):
+10. *Decided, 2026-10-13:* **Item class names** ([§1.1 Sync and async](#11-sync-and-async)):
     `Task` (data) / `SyncTask` / `AsyncTask` as proposed, or `TaskData` /
-    `Task` / `AsyncTask` to match the I/O classes' httpx pattern? A
-    question for peer review; the proposal keeps the short name for the
-    class most code touches. The base class follows suit: `Item` /
-    `SyncItem` / `AsyncItem`, or `ItemData` / `Item` / `AsyncItem`.
+    `Task` / `AsyncTask` to match the I/O classes' httpx pattern? The
+    proposal keeps the short name for the class most code touches. The
+    base class follows suit: `Item` / `SyncItem` / `AsyncItem`, or
+    `ItemData` / `Item` / `AsyncItem`.
+    *Decided by the author after peer review:* `Item` / `SyncItem` /
+    `AsyncItem`, as proposed; the short name stays with the data class.
 11. **Cooperation with calendaring-sync.**
     calendaring-sync (Sashank, same 2026-11-01 deadline) keeps sync state
     and detects conflicts; protocol adapters feed it. Its design
