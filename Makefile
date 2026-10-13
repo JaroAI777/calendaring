@@ -1,0 +1,27 @@
+.PHONY: help dev lint format test changelog-draft clean
+
+help:  ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
+
+dev:  ## Install with dev dependencies (editable)
+	@if [ "$$(id -u)" = "0" ]; then echo "Refusing to run make dev as root"; exit 1; fi
+	PIP_BREAK_SYSTEM_PACKAGES=1 pip install -e ".[dev]"
+
+lint:  ## Run ruff linter and formatter check
+	python -m ruff check src/ tests/
+	python -m ruff format --check src/ tests/
+
+format:  ## Auto-format code
+	python -m ruff check --fix src/ tests/
+	python -m ruff format src/ tests/
+
+test:  ## Run tests
+	python -m pytest
+
+changelog-draft:  ## Show the change log the next release would get
+	python -m towncrier build --draft --version next
+
+clean:  ## Remove build artifacts
+	rm -rf dist/ build/ *.egg-info src/*.egg-info .pytest_cache .ruff_cache
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

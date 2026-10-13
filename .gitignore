@@ -8,3 +8,11 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
+
+# build
+src/calendaring/_version.py
+dist/
+build/
+*.egg-info/
+.ruff_cache/
+.lycheecache

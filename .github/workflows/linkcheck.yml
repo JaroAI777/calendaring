@@ -1,0 +1,77 @@
+name: Link check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+  schedule:
+   - cron: "03 22 * * *"
+
+concurrency:
+  group: linkcheck-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linkcheck:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+    - name: Restore lychee cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: .lycheecache
+        key: cache-lychee-${{ github.run_id }}
+        restore-keys: cache-lychee-
+    - name: Check links with Lychee
+      id: lychee
+      uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2
+      with:
+        fail: false
+        args: >-
+          --timeout 30
+          --max-retries 6
+          --retry-wait-time 2
+          --cache
+          --max-cache-age 14d
+          .
+    - name: Open or update the Link Checker issue
+      if: steps.lychee.outputs.exit_code != 0 && github.ref == 'refs/heads/main'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        # gh does NOT auto-create labels; --force makes this idempotent so the
+        # very first broken-link run can't fail on a missing label.
+        gh label create link-checker --color FBCA04 \
+          --description "Automated link-checker report" --force
+        # Canonical = oldest issue with the label in ANY state. Querying --state
+        # all (not just open) lets a recovered-then-broken cycle REOPEN the
+        # original issue instead of spawning a fresh one every time.
+        CANON=$(gh issue list --label link-checker --state all --json number \
+          --jq '.[].number' | sort -n | head -1)
+        if [ -n "$CANON" ]; then
+          gh issue reopen "$CANON" || true   # no-op if already open
+          gh issue edit "$CANON" --body-file ./lychee/out.md
+          for n in $(gh issue list --label link-checker --state open --json number \
+            --jq '.[].number' | grep -vx "$CANON" || true); do
+            gh issue close "$n" --comment "Duplicate of #${CANON} - auto-closed by the link checker."
+          done
+        else
+          gh issue create --title "Link Checker Report" \
+            --body-file ./lychee/out.md --label link-checker
+        fi
+    - name: Close the Link Checker issue when links are healthy
+      if: steps.lychee.outputs.exit_code == 0 && github.ref == 'refs/heads/main'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        for n in $(gh issue list --label link-checker --state open --json number --jq '.[].number'); do
+          gh issue close "$n" --comment "All links are now healthy."
+        done

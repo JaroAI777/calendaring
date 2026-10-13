@@ -1,0 +1,8 @@
+# Link checker configuration, read by the pre-commit hook and the CI workflow.
+exclude = [
+  '^https?://([a-z0-9-]+\.)*example\.(com|org)',
+  '\.invalid(/|$)',
+]
+# Regexes, matched anywhere in the path, so anchor them. Ignored files
+# (.gitignore, .git/info/exclude) are skipped anyway.
+exclude_path = ['^\./prototypes/']
