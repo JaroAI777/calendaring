@@ -243,7 +243,10 @@ CalDAV *and* a Gitea issue tracker without lying about either".
 - **Priority:** Critical
 - **Estimated effort:** 14 hours
 - **Dependencies:** 1.1
-- **Deliverable:** ABCs plus an executable conformance suite
+- **Deliverable:** ABCs plus an executable conformance suite —
+  `calendaring.testing` (`AsyncConformance` / `SyncConformance`), the ABCs in
+  `src/calendaring/_async/`, and the in-memory reference backend
+  `calendaring.memory` (drafted 2026-10-14)
 
 The conformance suite is the load-bearing piece of this project: **one test suite
 that every backend must pass**, parameterised by declared capability. It is what
@@ -251,14 +254,51 @@ makes "the same API regardless of backend" a checkable claim rather than a promi
 and it is what makes each later backend cheap to add.
 
 **Tasks:**
-- [ ] Write the conformance tests first, against the API spec, before any ABC exists
-- [ ] Confirm the tests fail (there is nothing to run them against yet)
-- [ ] Define the abstract base classes the tests imply
-- [ ] Make the suite capability-aware: a backend declares what it supports, and
+- [x] Write the conformance tests first, against the API spec, before any ABC exists
+- [x] Confirm the tests fail (there is nothing to run them against yet)
+- [x] Define the abstract base classes the tests imply
+- [x] Make the suite capability-aware: a backend declares what it supports, and
       unsupported operations are asserted to fail in the specified way rather than
       being skipped silently
-- [ ] Make the suite run in both sync and async mode, per 0.2's conclusion
-- [ ] Build an in-memory reference backend so the suite has something to pass
+- [x] Make the suite run in both sync and async mode, per 0.2's conclusion
+- [x] Build an in-memory reference backend so the suite has something to pass
+
+Notes from doing it:
+
+- The suite is written once, async, and the sync suite is generated from it
+  like the library code. That needed 1.3's generator early, so
+  `tools/generate_sync.py` and its freshness test came with this item; the
+  rest of 1.3 (type-checker gate, specimens, replacement-map hardening,
+  contributor documentation) is still open. One finding for 1.3 already:
+  unasync's output depends on the Python version. From 3.12 (PEP 701) an
+  f-string is tokenised into parts and names inside its expressions are
+  renamed; on 3.11 it is one token and they are not. A test now rejects a
+  name to be renamed inside an f-string in `_async/`.
+- The reference backend takes a capability profile, and four profiles run
+  the suite: `FULL`, `TRACKER` (tasks only, mapped status and priority,
+  assigned UIDs), `MINIMAL` (writable, most optional features left out, no
+  collections of its own, so the suite borrows one that already holds an
+  item) and `FEED` (read-only). Between them the capability-aware tests run
+  both branches, except the supported branches of
+  `recurrence.edit-occurrence` and `task.complete-recurring` (below). Every
+  skip says why: a write test on the read-only profile after the write was
+  checked to raise, or a recurrence test where nothing recurs.
+- A backend implements a handful of primitives (`_query`, `_fetch`,
+  `_create`, `_update`, `_delete`); capability checks, loss policies,
+  client-side filtering, change emulation, `move` emulation, `relatives` and
+  `verify` are written once in the base class.
+- Two features were added to [§5.1](API_DESIGN.md#51-the-table):
+  `recurrence.edit-occurrence` (saving one occurrence) and
+  `task.complete-recurring`. The reference backend declares both
+  `UNSUPPORTED` until the merge lands in `recurring_ical_events`
+  ([API_DESIGN Q3](API_DESIGN.md#10-open-questions)); the CalDAV backend
+  (2.1) can declare them `FULL` by calling caldav's code.
+- Sorting reads `icalendar_searcher.Searcher._sort_keys`, a private
+  attribute; `test_search_sorts` catches a rename, and a public accessor
+  belongs in icalendar-searcher.
+- Change tracking through a tracked `component` subclass (Q13) waits for
+  [icalendar issue 1914](https://github.com/collective/icalendar/issues/1914);
+  `save()` always writes.
 
 ---
 
@@ -411,6 +451,12 @@ disagree.
 - [ ] Settle [API_DESIGN Q12](API_DESIGN.md#10-open-questions) (`delete()` on an
       occurrence, and conflicts between sibling occurrences) before mapping
       `delete()` and `save()` for occurrences
+- [ ] Tune `verify=True`'s comparison against what real servers rewrite
+      (parameter quoting, split `CATEGORIES`, TZID to UTC), and compare
+      subcomponents such as `VALARM` too; it compares raw unfolded lines today
+      (roadmap 1.2 review)
+- [ ] Decide what `get(uid)` returns for a stored object holding several
+      overrides and no master; it returns the first today (roadmap 1.2 review)
 - [ ] Pass the conformance suite
 - [ ] Record, do not silently fix, bugs found in `caldav` itself: those fixes are
       caldav's budget, not this project's
@@ -501,6 +547,14 @@ express this backend without contortion, the finding is more valuable than the c
       conformance suite; a permanent instance is optional, for dogfooding
 - [ ] Auth, pagination and rate limiting for that tracker's API
 - [ ] Map its task model to the library's, and record every lossy mapping
+- [ ] Let the write primitives apply [API_DESIGN §3.5](API_DESIGN.md#35-native-passthrough)'s
+      native-value rule: `_create`/`_update` get only a calendar today, and
+      `complete()` drops `native_status` through `as_data()`; add a
+      conformance test that an unchanged save keeps the native value
+      (roadmap 1.2 review)
+- [ ] Report unknown IANA properties and subcomponents as losses where
+      `properties.passthrough` is `UNSUPPORTED`; only `X-` properties are
+      today (roadmap 1.2 review)
 - [ ] Pass the conformance suite, with unsupported operations failing as specified
 - [ ] Write up what did not fit — this feeds the capability matrix (4.3) and any
       later API revision

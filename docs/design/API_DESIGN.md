@@ -669,9 +669,11 @@ What an item never holds:
 caldav [#597](https://github.com/python-caldav/caldav/issues/597) asks for
 helpers that tell these cases apart, and the table is the list such helpers
 would answer. `is_occurrence` is the one that matters most, because it says
-that the item is not the whole stored object. Whether to add `is_recurring`
-and the like as convenience properties is left to
-[roadmap 1.2](ROADMAP.md#12-abstract-base-classes-and-the-backend-conformance-suite).
+that the item is not the whole stored object. `is_recurring` and the like
+were left out in
+[roadmap 1.2](ROADMAP.md#12-abstract-base-classes-and-the-backend-conformance-suite):
+`"RRULE" in item.component` says it, and a helper can be added later
+without breaking anything.
 
 These are the mode-free data classes. The bound subclasses add only their collections and the delegating I/O methods
 ([§1.1 Sync and async](#11-sync-and-async)):
@@ -1007,6 +1009,16 @@ the details, and is normalised to a `Capability` on load. The details keys
 are documented per feature, so the capability matrix (roadmap 4.3) can
 print them, and the conformance suite can use them. For example, it
 asserts that a `LOSSY` priority comes back as one of the declared `values`.
+`values` and an optional `map` (sent value → stored value; a value missing
+from both is dropped) are enough for the generic layer to report the losses
+itself, so a backend whose mapping is that simple writes no mapper. A
+`LOSSY` entry without `values` is allowed, for a backend with mapping rules
+of its own; the conformance suite can then check only that each value is
+either stored or refused before any I/O.
+
+`supports()` counts `UNKNOWN` as not supported: it is the view for a caller
+deciding whether to rely on a feature, and nothing promises an unprobed one
+works. The operation itself is still attempted.
 
 `Feature` is a `StrEnum` with dotted values, so that it can be written
 in configuration files and in the generated capability matrix ([roadmap 4.3](ROADMAP.md#43-backend-capability-matrix)). The
@@ -1027,6 +1039,8 @@ initial set:
 | `identity.client-native-id` | `add(native_id=...)`: the caller may name the stored object (CalDAV href, vdir file name) |
 | `properties.passthrough` | unknown properties and components survive a round trip |
 | `recurrence`, `recurrence.edit-this-and-future` | stores `RRULE`; [§3.7 Recurrence](#37-recurrence) |
+| `recurrence.edit-occurrence` | `save(occurrence)` merges it into the stored object ([§3.7](#37-recurrence)); `UNSUPPORTED` where the merge is not available yet (Q3) |
+| `task.complete-recurring` | `complete()` on a recurring task or one occurrence of it ([§3.7](#37-recurrence)) |
 | `move` | [§2.3 Collection](#23-collection) |
 | `task.status`, `task.priority`, `task.percent-complete` | `LOSSY` when values are mapped |
 | `task.start`, `task.due`, `task.completed`, `task.planned`, `task.estimate` | |
@@ -1114,7 +1128,7 @@ probe (caldav-server-tester) or a read-back finds it. So every write takes
 reloaded and compared with what was sent. The comparison covers every
 property that was sent, after normalisation, except those the mapper had
 already reported as not storable (a lossy write, above), and skips what
-servers legitimately change: `DTSTAMP`, `SEQUENCE`, property
+servers legitimately change: `DTSTAMP`, `SEQUENCE`, `LAST-MODIFIED`, property
 order, and the identity a backend assigns (`uid`, `native_id`, `etag`;
 [§3.2 Identity](#32-identity)). A difference raises `VerificationError`
 listing what the server dropped or changed. It is not a `LossyWriteError`:

@@ -30,6 +30,20 @@ pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commi
 make test
 ```
 
+## Sync and async code
+
+The async code in the `_async/` directories is the source; the `_sync/`
+directories next to them are generated from it with unasync and committed.
+Edit `_async/` only, then run
+
+```
+python tools/generate_sync.py
+```
+
+`tests/test_generated_sync.py` fails if a `_sync/` copy is stale.  Code with
+no token-for-token sync equivalent (`asyncio` in particular) goes in
+`src/calendaring/_concurrency.py`, once per mode.
+
 ## Commit messages
 
 Please follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) and write messages in the imperative mood:

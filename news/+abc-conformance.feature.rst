@@ -1,0 +1,1 @@
+The abstract base classes of the unified API (``Workspace``, ``Backend``, ``Collection`` and the item classes, in sync and async mode), the backend conformance suite (``calendaring.testing``), and an in-memory reference backend (``calendaring.memory``).  The sync classes are generated from the async ones by ``tools/generate_sync.py``.
