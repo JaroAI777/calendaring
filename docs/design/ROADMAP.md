@@ -408,6 +408,9 @@ disagree.
       this layer at all (see 0.2's comparison, *What is not settled*), and
       every caldav name needs a replacement-map entry so the generated sync
       layer imports names that exist (`SyncDAVClient` does not)
+- [ ] Settle [API_DESIGN Q12](API_DESIGN.md#10-open-questions) (`delete()` on an
+      occurrence, and conflicts between sibling occurrences) before mapping
+      `delete()` and `save()` for occurrences
 - [ ] Pass the conformance suite
 - [ ] Record, do not silently fix, bugs found in `caldav` itself: those fixes are
       caldav's budget, not this project's

@@ -2,7 +2,7 @@
 
 **Roadmap item:** [1.1 Unified API design and peer review](ROADMAP.md#11-unified-api-design-and-peer-review)
 
-**Status:** draft by Claude Opus 5.5, 2026-10-08. Reviewed and edited by the author on the following days, and his comments applied. The A1 rework was accepted on 2026-10-10. Peer review started on 2026-10-10 in [PR 5](https://github.com/pycalendar/calendaring/pull/5) ([§11 Peer review](#11-peer-review)).
+**Status:** draft by Claude Opus 5.5, 2026-10-08. Reviewed and edited by the author on the following days, and his comments applied. The A1 rework was accepted on 2026-10-10. Peer-reviewed from 2026-10-10 in [PR 5](https://github.com/pycalendar/calendaring/pull/5) and in video calls; the review was considered complete on 2026-10-13 ([§11 Peer review](#11-peer-review)).
 
 **Inputs:** [0.1 task model survey](TASK_MODEL_SURVEY.md), [0.2 sync/async decision](SYNC_ASYNC_ARCHITECTURE.md#11-decision), [0.3 decisions D1–D7](PRIOR_ART_AND_DECISIONS.md#part-3-project-decisions)
 
@@ -557,8 +557,19 @@ these three:
 | a full recurrence set | the master (`RRULE` or `RDATE`) and all its overridden occurrences, if any | the master | `False` | absent | 110, 011 |
 | a single occurrence | one component: a generated occurrence, or an override | that occurrence | `True` | set | 101 |
 
-**On a full recurrence set, `component` is the master only.** A write
-through it does not reach the overrides; see [§10](#10-open-questions), Q14.
+**On a full recurrence set, `component` is the master only, and writing
+through it is a trap.** `item.component.summary = x` does what it says on a
+non-recurring item, on a single occurrence, and on a series without
+overrides. On a full recurrence set with overrides, each override is a
+whole component that RFC 5545 uses *instead of* the generated occurrence,
+so the write renames the series except for the overridden occurrences,
+which keep the old summary. Moving the master's `DTSTART` is worse: the
+overrides' `RECURRENCE-ID`s no longer match a generated occurrence.
+Nothing raises, and the result looks right until someone opens one of the
+overridden occurrences. Until a series edit exists, a caller changing a
+series with overrides has to edit the overrides too, through
+`item.icalendar`. The fix is left to edit-icalendar
+([§10](#10-open-questions), Q14).
 
 **A single occurrence is part of a stored object, not all of it.** The
 stored object may also hold the master and other overrides that the item
@@ -1330,7 +1341,8 @@ since calendaring depends on caldav.
 
 ## 10. Open questions
 
-For the author and for peer review. Each has a proposed answer; none blocks
+Settled after peer review on 2026-10-13: each question is decided, deferred, or
+marked as not blocking; none blocks
 [roadmap 1.2](ROADMAP.md#12-abstract-base-classes-and-the-backend-conformance-suite) from starting.
 
 1. *Decided, 2026-10-10:* **Items and I/O (A1).** Mode-free data classes
@@ -1397,7 +1409,8 @@ For the author and for peer review. Each has a proposed answer; none blocks
    [§5.1 The table](#51-the-table) is flexible: it starts with what the
    funded backends need and grows when needed. Whether it is closed per
    release after 1.0 is a question for then.
-8. **The configuration file is shared by caldav, calendaring-jmap and this
+8. *Deferred to [roadmap 1.4](ROADMAP.md#14-configuration-and-credentials), 2026-10-13:*
+   **The configuration file is shared by caldav, calendaring-jmap and this
    library.** Where should its parser live? A proposal for the team is in
    [CONFIGURATION_PROPOSAL.md](CONFIGURATION_PROPOSAL.md).
 9. *Decided, 2026-10-12:* **One item, several backends** (the author's suggestion): an
@@ -1431,7 +1444,13 @@ For the author and for peer review. Each has a proposed answer; none blocks
     `ItemData` / `Item` / `AsyncItem`.
     *Decided by the author after peer review:* `Item` / `SyncItem` /
     `AsyncItem`, as proposed; the short name stays with the data class.
-11. **Cooperation with calendaring-sync.**
+11. *Not blocking, 2026-10-13:* **Cooperation with calendaring-sync.**
+    Assumed to be easy: the interfaces below are kept compatible, and
+    nothing in 1.x waits for it. Still open: which of the two depends on
+    the other, a calendaring adapter in calendaring-sync or calendaring
+    depending on calendaring-sync (for a `Mirror`, which Q9 leaves out of
+    1.x), and with it the licence question at the end.
+
     calendaring-sync (Sashank, same 2026-11-01 deadline) keeps sync state
     and detects conflicts; protocol adapters feed it. Its design
     ([PR 19](https://github.com/pycalendar/calendaring-sync/pull/19))
@@ -1489,19 +1508,28 @@ For the author and for peer review. Each has a proposed answer; none blocks
     [what is in the way of a calendaring adapter](https://github.com/pycalendar/calendaring-sync/pull/19#issuecomment-6114023463);
     server evidence on calendaring-sync's
     [`evidence` branch](https://github.com/pycalendar/calendaring-sync/tree/evidence).
-12. **Occurrence items: `delete()` and the shared etag**
+12. *Deferred, 2026-10-13:* **Occurrence items: `delete()` and the shared etag**
     ([What an item contains](#what-an-item-contains)). Occurrences of one
     stored series share its `native_id` and `etag`, so the rules for a whole
-    object do not carry over:
+    object do not carry over. The proposals below are drafts. The author
+    recalls reasons for preferring `STATUS:CANCELLED` over `EXDATE`, to be
+    written down when this is settled.
+    [#398](https://github.com/python-caldav/caldav/issues/398) prefers
+    `CANCELLED` to raising an error from `delete()`, since a traceback will
+    reach some end user sooner or later. To be settled before
+    [roadmap 2.1](ROADMAP.md#21-caldav-backend) implements `delete()` on an
+    occurrence.
     - **`delete(occurrence)`** must not delete the stored series, which
       caldav may do today: caldav
       [#398](https://github.com/python-caldav/caldav/issues/398) suspects
       it, and nobody has tested it.
-      **Proposal:** remove that occurrence's override, if there is one, and
-      add an `EXDATE` to the master. When there is no master, remove the
-      override, and delete the stored object only when it was the last one.
-      `STATUS:CANCELLED`, which #398 suggests, would be a different call: an
-      edit, not a deletion.
+      Two options. **`EXDATE`:** remove that occurrence's override, if
+      there is one, and add an `EXDATE` to the master. When there is no
+      master, remove the override, and delete the stored object only when
+      it was the last one. **`STATUS:CANCELLED`**, which #398 suggests and
+      the author leans towards: set it on the occurrence's override,
+      creating the override if needed. The occurrence stays visible as
+      cancelled, so this is an edit rather than a deletion.
     - **Conflicts between siblings.** Saving one occurrence changes the
       stored object's etag under its siblings. If a sibling's save then
       required the etag it was read with, it would raise `ConflictError`
@@ -1512,102 +1540,96 @@ For the author and for peer review. Each has a proposed answer; none blocks
       `SEQUENCE` or `LAST-MODIFIED`. A generated occurrence has no override,
       and a concurrent edit of the master (its `RRULE`, its `DTSTART`)
       changes it too, so there the check is the master's.
-13. **Change tracking and write strategies** (the reviewer's "borrowing",
+13. *Decided, 2026-10-12:* **Change tracking and write strategies** (the reviewer's "borrowing",
     [PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4237509309)).
-    Edits to an item would mark it dirty and notify a strategy, which writes
-    at once, gathers and flushes on request, or syncs in the background. The
+
+    **Writes are explicit.** The funded API has explicit `save()` and
+    `reload()`, and `save()` is the primitive any later layer is built on
+    ([PR 5 video meeting](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6122366863)).
+    Implicit synchronization, where an edit marks the item dirty and a
+    strategy writes at once, gathers and flushes on request, or syncs in
+    the background, is wanted but not a priority, and is
+    [beyond the funded scope](ROADMAP.md#beyond-the-funded-scope). The
     [p5 prototype](SYNC_ASYNC_ARCHITECTURE.md#12-revisited-the-adapter-pattern-2026-10-10)
     shows gather-and-flush working in both modes without duplicated I/O.
-    Since the item has no properties of its own
-    ([§3.1](#31-the-base-a-typed-view-over-icalendar)), a write through
-    `item.component` has to be seen there.
 
-    **How writes are tracked (decided 2026-10-12).** `component` becomes
+    **Writes are tracked through `component`.** The item has no properties
+    of its own ([§3.1](#31-the-base-a-typed-view-over-icalendar)), so a
+    write through `item.component` has to be seen there. `component` is
     this library's subclass of `icalendar.Todo` / `Event` / `Journal`,
     which overrides `__setitem__`, `__delitem__`, `pop` and `update` to
-    mark the item dirty and notify the strategy. The typed path,
-    `task.component.summary = x`, is then also the tracked path, with no
-    property list repeated here and no loss of static types. Checked
-    against `icalendar` 7.3.1.dev188: every typed-property write tried
-    (`summary`, `status`, `DUE`, `DURATION`, `DTSTART`, `categories`,
-    `add()`, `del`) goes through those methods. What it needs from
-    `icalendar` is parsing into the subclass:
-    [icalendar issue 1914](https://github.com/collective/icalendar/issues/1914)
-    proposes a `ComponentFactory` used for parsing and
-    `Component.convert_to(factory)`, which `Task.from_icalendar()` would
-    use on a caller's `Calendar` (a copy). `icalendar` would also have to
-    test and document that all writes go through those methods. Two gaps
-    remain: an in-place change (`task.component.categories.append(...)`)
-    calls no setter, so `save()` still compares a `to_ical()` snapshot as
-    the backstop; and a typo (`component.sumary = x`) is still accepted
-    silently. Rejected: delegating unknown item attributes to `component`
-    (`task.summary` would be `Any` to type checkers), with or without
-    renaming it `_component`, and a generated typing stub (code
-    generation). The comparison is in git history, as
-    `docs/design/WIP_ITEM_DELEGATION.md`.
+    mark the item dirty. The typed path, `task.component.summary = x`, is
+    then also the tracked path, with no property list repeated here and no
+    loss of static types. Against `icalendar` 7.3.1.dev188, every
+    typed-property write tried (`summary`, `status`, `DUE`, `DURATION`,
+    `DTSTART`, `categories`, `add()`, `del`) goes through those methods.
 
-    **Decided** in the
-    [PR 5 video meeting](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6122366863)
-    (2026-10-12): the funded API has explicit `save()` and `reload()`, and
-    `save()` is the primitive any later layer is built on. Implicit
-    synchronization is wanted, but is not a priority and is
-    [beyond the funded scope](ROADMAP.md#beyond-the-funded-scope).
-
-    The reviewer also asked for edits spanning several calls, or several
-    items, to behave
-    [like a transaction](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6113054014).
-    Gather-and-flush gives the first half: nothing is written until the
-    flush. The other half is open: no backend here has a multi-object
-    transaction (CalDAV writes one resource per request, and JMAP `/set`
-    applies and reports each object on its own, RFC 8620 §5.3), so a flush
-    that fails halfway leaves some writes stored. A flush
-    would have to report which ones, as fan-out's `MultiResult` does
-    ([§2.1](#21-workspace)), rather than promise atomicity.
-14. **Writing through `component` on a recurrence set with overrides.**
-    `item.component.summary = x` does what it says on a non-recurring
-    item, on a single occurrence, and on a series without overrides. On a
-    full recurrence set with overrides ([What an item contains](#what-an-item-contains))
-    `component` is the master, and each override is a whole component that
-    RFC 5545 uses *instead of* the generated occurrence. So the write
-    renames the series except for the overridden occurrences, which keep
-    the old summary. Moving the master's `DTSTART` is worse: the overrides'
-    `RECURRENCE-ID`s no longer match a generated occurrence. Nothing
-    raises, and the result looks right until someone opens one of the
-    overridden occurrences.
-    [`ical`](PRIOR_ART_AND_DECISIONS.md#13-ical-allen-porter) avoids this
-    by not editing in place: `store.edit(uid, patch, recurrence_id,
-    recurrence_range)` takes a partial item holding only the changed
-    fields. Without a `recurrence_id`, the patch goes to every component
-    with that `UID`, the master and all overrides. With one, it forks an
-    override (`Range.NONE`) or ends the series with `UNTIL` and starts a
-    new one (`THIS_AND_FUTURE`). Options here: document the trap; a
-    patch-style series edit like `ical`'s, which by
-    [D1](PRIOR_ART_AND_DECISIONS.md#d1-packaging-principle) would belong in
-    `recurring_ical_events` (Q3); or have `save()` warn when the master
-    changed and the stored object has overrides. A tracked `component`
-    (Q13, alternative F) would let `save()` see *which* properties changed,
-    which a patch-style merge needs.
+    - **Needed from `icalendar`:** parsing into the subclass, proposed in
+      [icalendar issue 1914](https://github.com/collective/icalendar/issues/1914)
+      as a `ComponentFactory` and `Component.convert_to(factory)`, which
+      `Task.from_icalendar()` would use on a copy of the caller's
+      `Calendar`; and a tested, documented promise that all writes go
+      through those methods.
+    - **Known gaps:** an in-place change
+      (`task.component.categories.append(...)`) calls no setter, so
+      `save()` still compares a `to_ical()` snapshot as the backstop; and a
+      typo (`component.sumary = x`) is accepted silently.
+    - **Rejected:** delegating unknown item attributes to `component`
+      (`task.summary` would be `Any` to type checkers), with or without
+      renaming it `_component`, and a generated typing stub (code
+      generation). The comparison is in git history, as
+      `docs/design/WIP_ITEM_DELEGATION.md`.
+    - **Transactions, deferred with implicit synchronization.** The
+      reviewer asked for edits spanning several calls, or several items, to
+      behave
+      [like a transaction](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6113054014).
+      Gather-and-flush would hold writes until the flush, but no backend
+      here has a multi-object transaction (CalDAV writes one resource per
+      request, and JMAP `/set` applies and reports each object on its own,
+      RFC 8620 §5.3). A flush that fails halfway would have to report which
+      writes were stored, as fan-out's `MultiResult` does
+      ([§2.1](#21-workspace)), rather than promise atomicity.
+14. *Deferred to edit-icalendar, 2026-10-13:* **Writing through `component` on a recurrence set with overrides.**
+    The trap is documented in
+    [What an item contains](#what-an-item-contains), and the fix is left to
+    [edit-icalendar](https://github.com/pycalendar/edit-icalendar). Q3
+    sends splitting a series and editing single occurrences there; this
+    adds whole-series edits on a set with overrides. For reference when that is
+    designed: [`ical`](PRIOR_ART_AND_DECISIONS.md#13-ical-allen-porter)
+    avoids the trap by not editing in place: `store.edit(uid, patch,
+    recurrence_id, recurrence_range)` takes a partial item holding only the
+    changed fields. Without a `recurrence_id`, the patch goes to every
+    component with that `UID`, the master and all overrides. With one, it
+    forks an override (`Range.NONE`) or ends the series with `UNTIL` and
+    starts a new one (`THIS_AND_FUTURE`). Another option for then, or a
+    stopgap before it, is for `save()` to warn when the master changed and
+    the stored object has overrides.
+    The tracked `component` (Q13) lets `save()` see *which* properties
+    changed, which a patch-style merge needs.
 
 ---
 
 ## 11. Peer review
 
-Started 2026-10-10: an `icalendar` and `recurring-ical-events` maintainer
-(@niccokunzmann) is reviewing in
-[PR 5](https://github.com/pycalendar/calendaring/pull/5). What it has changed
-so far: the item base class is `Item` and carries no iCalendar properties of
+2026-10-10 to 2026-10-13, considered complete on 2026-10-13: an
+`icalendar` and `recurring-ical-events` maintainer (@niccokunzmann)
+reviewed in [PR 5](https://github.com/pycalendar/calendaring/pull/5) and in
+video calls. What it changed:
+the item base class is `Item` and carries no iCalendar properties of
 its own ([§3.1](#31-the-base-a-typed-view-over-icalendar)); what an item may
 hold is spelled out ([What an item contains](#what-an-item-contains)); the
 occurrence merge goes to `recurring_ical_events` (Q3); and change tracking is
 Q13, which has decided how writes are tracked (a tracked subclass of the
-`icalendar` components, pending icalendar issue 1914) and still has his
-question about transactions open. The video meeting of
+`icalendar` components, pending icalendar issue 1914) and defers his
+question about transactions along with implicit synchronization. The video meeting of
 2026-10-12 kept `save()` and `reload()` explicit and moved implicit
 synchronization beyond the funded scope. His proposal of per-mode adapters (`item.sync.save()`) was
 prototyped and not adopted
 ([sync/async §12](SYNC_ASYNC_ARCHITECTURE.md#12-revisited-the-adapter-pattern-2026-10-10)).
-The roadmap's warning applies: a review is a dependency on someone else's
-calendar.
+
+The table lists the reviewers considered when the review was planned.
+The review was done by @niccokunzmann and Sashank (below); the others were
+not approached for roadmap 1.1.
 
 | Reviewer (role) | Why | What to ask |
 |---|---|---|
@@ -1617,8 +1639,8 @@ calendar.
 | `plann` (the author, as its maintainer) | the committed downstream consumer; [roadmap 1.6](ROADMAP.md#16-time-tracking-model-and-api) depends on [§3.4 Task](#34-task) | [§3.4 Task](#34-task), [§4 Search](#4-search) |
 | a vdirsyncer/pimsync maintainer | [§7 Change detection](#7-change-detection) adopts their contract | [§7 Change detection](#7-change-detection) |
 
-What the author needs to do: decide whom to approach, and send this
-document, or [§10 Open questions](#10-open-questions) alone. The author has reviewed it; Q11 (the licence offer) still awaits him.
+The author has reviewed it. Q11's licence offer and dependency direction
+are still open, but do not block 1.x.
 
 Sashank (calendaring-sync) reviewed [§7 Change detection](#7-change-detection)
 from a sync tool's side on 2026-10-11, in PR 5 and in
