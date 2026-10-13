@@ -387,7 +387,7 @@ handles the two differently. *Asked for by calendaring-sync
 
 **`wire=` sends given bytes instead of a serialisation.** `add(item,
 wire=data)` and `save(item, wire=data)` send `data` exactly, where a
-plain write would send `item.icalendar.to_ical()`; what the server then
+plain write would send `item.to_ical()`; what the server then
 stores may still differ (see "The content after a write" below). Identity
 and precondition come from where they always do: on `add`, from
 `native_id=` and `If-None-Match`; on `save`, from the item's `native_id`
@@ -477,6 +477,8 @@ class Item:
     is_occurrence: bool                 # True when the item is one occurrence, not the whole stored object
 
     def copy(self) -> Self: ...
+    def to_ical(self) -> bytes: ...                 # the item as it is now; see "Raw data and other libraries"
+    def replace_ical(self, data: str | bytes) -> None: ...   # new content, same identity
 ```
 
 **The item does not repeat iCalendar's properties.** Per
@@ -542,6 +544,67 @@ property order and parameter quoting. Writing given bytes is `wire=` on
 [`add` and `save`](#23-collection). *Asked for by calendaring-sync
 ([PR 19](https://github.com/pycalendar/calendaring-sync/pull/19#issuecomment-6114023463));
 proposal, open to review.*
+
+#### Raw data and other libraries
+
+Raw iCalendar text goes in and out through explicit methods, named as in
+`icalendar`:
+
+- `Task.from_ical(data)` makes a new data item from a string or bytes
+  ([factories](#what-an-item-contains), below).
+- `item.to_ical()` returns the item as it is now, serialised by
+  `icalendar`. That is not `wire`, which is what the server sent.
+- `item.replace_ical(data)` replaces the item's content and keeps its
+  identity and backend state (`native_id`, `etag`, its collections). The
+  new data must describe the same item: the same `UID`, the same
+  component type, the same kind of item (a row of the table in
+  [What an item contains](#what-an-item-contains)), and on an occurrence
+  the same `RECURRENCE-ID`, or it raises `ValueError`. It parses into the
+  tracked subclass of [§10](#10-open-questions) Q13, so `item.component`
+  becomes a new object: a reference kept from before is stale, and writes
+  through it are lost. It counts as an edit, so `save()` writes it, and
+  like any edit it leaves `wire` and `native` as they were read. This is
+  caldav's `obj.data = text; obj.save()`.
+
+**No other in-memory representation.** There is no `vobject` and no
+[`ical`](PRIOR_ART_AND_DECISIONS.md#13-ical-allen-porter) object on an
+item. A caller who prefers either converts through text,
+`vobject.readOne(item.to_ical().decode())`, and comes back through
+`item.replace_ical(v.serialize())`. Conversion helpers, and borrowing
+another library's object (caldav's `edit_icalendar_component()` pattern,
+a context manager that lends the object out and parses it back on exit;
+not the change tracking that Q13 also calls borrowing), are
+[beyond the funded scope](ROADMAP.md#beyond-the-funded-scope) with no
+date. They are written down so that they are not added ad hoc.
+
+The reason is caldav's history. caldav started with `vobject` only.
+`vobject` fell out of use and many users asked for `icalendar`, but
+replacing it would have broken every caller, so caldav carries `data`,
+`vobject_instance` and `icalendar_instance` side by side and converts
+lazily between them, trying to convert as rarely as possible. That
+bookkeeping is a large and painful part of its object code, and in the
+author's view it does not succeed in avoiding the conversions. Here
+`icalendar` is the only storage
+([D6](PRIOR_ART_AND_DECISIONS.md#d6-canonical-in-memory-model)).
+
+**A later move to `ical` is not planned, but not ruled out.** The same
+thing could happen to `icalendar`. What would survive such a move
+unchanged is the raw data methods above, identity and backend state, and
+named factory arguments that take standard types
+(`Task.new(summary=...)`). What would not is `item.icalendar`,
+`item.component` and the typed-property path through it, which is the
+whole point of D6, `Task.from_icalendar()`, `Task.new(**properties)`
+(whose names and values follow `icalendar.Todo.new`), and client-side
+search through `icalendar-searcher`, which works on `icalendar` objects.
+The move would be a major version.
+Two rules keep it from becoming caldav's situation:
+
+- `icalendar` types appear in the public API only as `item.icalendar`,
+  `item.component` and the argument of `Task.from_icalendar()`. Other signatures take and return standard types
+  (`datetime`, `str`, `bytes`), the library's own types, or raw data.
+- An attribute is never redefined to hold another library's object. A
+  second library would get an attribute of its own beside `icalendar`,
+  and the old one would be deprecated rather than changed in place.
 
 #### What an item contains
 
@@ -1283,8 +1346,9 @@ caldav's public API as of 2026-10-08 (caldav 3.4.0).
 | `obj.load()`, `obj.delete()` | `obj.reload()`, `obj.delete()` | same (in place on a bound item) |
 | `multiget()`, `load_by_multiget()` | used inside the backend | not a public call |
 | `icalendar_instance`, `edit_icalendar_component()` (borrowing) | `item.icalendar`, `item.component` | simpler: the item is the iCalendar data, nothing to borrow |
-| `vobject_instance` | — | escape hatch (`item.native.vobject_instance`) |
-| `data`, `wire_data` | `item.wire` (as read), `item.icalendar.to_ical()` (as it is now) | changed: `wire` is the server's bytes as read, not caldav's normalised copy, and set to `None` by a write |
+| `vobject_instance` | — | convert through `item.to_ical()` and `item.replace_ical()`, or, read-only, the escape hatch on CalDAV (`item.native.vobject_instance`); [Raw data and other libraries](#raw-data-and-other-libraries) |
+| `data = text` | `item.replace_ical(text)` | same, but the `UID` must not change |
+| `data`, `wire_data` | `item.wire` (as read), `item.to_ical()` (as it is now) | changed: `wire` is the server's bytes as read, not caldav's normalised copy, and set to `None` by a write |
 | `search(expand=True)` | `search(expand=True)` | same |
 | `search(expand=True, split_expanded=False)` | — | dropped: an item is never several occurrences without their master ([§3.1](#what-an-item-contains)) |
 | `save(only_this_recurrence=True)` (default) | `save(occurrence)` | same ([§3.7 Recurrence](#37-recurrence)) |
@@ -1568,7 +1632,7 @@ marked as not blocking; none blocks
       [icalendar issue 1914](https://github.com/collective/icalendar/issues/1914)
       as a `ComponentFactory` and `Component.convert_to(factory)`, which
       `Task.from_icalendar()` would use on a copy of the caller's
-      `Calendar`; and a tested, documented promise that all writes go
+      `Calendar`, and `replace_ical()` on what it parses; and a tested, documented promise that all writes go
       through those methods.
     - **Known gaps:** an in-place change
       (`task.component.categories.append(...)`) calls no setter, so
