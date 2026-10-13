@@ -2,6 +2,8 @@
 
 *One Python API for calendars and task lists: CalDAV, JMAP, iCalendar feeds, local files and issue trackers.*
 
+**Purpose:** today, a program that works with calendar data has to pick a library for each place the data lives: `caldav` for a CalDAV server, `calendaring-jmap` for a JMAP server, `icalendar` and file handling for `.ics` files on disk.  This library gives one way to read and change that data, wherever it lives.  An application written against it can be pointed at a CalDAV server, a local `.ics` file or an issue tracker by changing its configuration, not its code.  Keeping two of those systems in step is a different job, done by [calendaring-sync](https://github.com/pycalendar/calendaring-sync).  The design is in [docs/design/API_DESIGN.md](docs/design/API_DESIGN.md).
+
 The library is called `calendaring`: the same name on GitHub, on PyPI and as the import (see [the 0.3 decisions](docs/design/PRIOR_ART_AND_DECISIONS.md#d2-the-name)).  It was earlier called `calendaring-client`.  "Calendaring" is the IETF's word, and in RFC 5545 it covers tasks too, but few people know that, so the tagline above carries the message that this library supports tasks and not only events.
 
 ## Background
@@ -10,9 +12,16 @@ I've been the maintainer of the Python CalDAV client package for many years now.
 
 There exists no good standards for tasks.  There are some industry standards, except for that the iCalendar standard offers support for task lists, but it's not a very good standard for it.  For instance, it's not very clear how to add information about time estimates and time spent on a task.
 
-## What is it (going to be)?
+## Mission statement
 
-This is intended to be a general python client for accessing task and calendaring information from various sources.  Version 0.1.0 it won't be much more than a wrapper for the CalDAV library already - but it will provide a clean, general and well-documented interface, it will support a clean, general and well-documented configuration file, with the intention to support other backends and not only CalDAV servers.
+This is intended to be a general Python API for accessing task and calendaring information, regardless of where it's stored and how to access the backend.  In version 0.1.0 it won't be much more than a wrapper for the CalDAV library already - but it will provide a clean, general and well-documented interface, it will support a clean, general and well-documented configuration file, with the intention to support other backends and not only CalDAV servers.  In the future, support for JMAP, text files and other calendar-like or task-management software systems will be implemented.
+
+### Personal motivation
+
+* I feel that the combination of a lack of a good task list and "too many TODO-lists" has been a consistent pain for most of my life.
+* I would like to have all relevant tasks and calendar events open in front of me when planning my days, weeks and months regardless of where the tasks are stored.
+* I'd like to throw standardized attributes on my tasks and issues (like time spent, time estimate, priority, due-time) regardless of where they exist (this may involve synchronizing information from external systems with my own calendar/task store).  I do hope that this library can help me achieve this.
+* I have the `plann`-utility which is a CLI/frontend for CalDAV servers - but I'd like to use it towards other systems as well.
 
 ## Existing systems
 

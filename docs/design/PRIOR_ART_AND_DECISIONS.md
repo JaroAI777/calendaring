@@ -50,6 +50,8 @@ and EteSync 1.0 and 2.0.
 **What to take from it:**
 - The *shape* is right: backends talk `icalendar` objects, and the front end
   never sees the wire format. That supports [D6](#d6-canonical-in-memory-model).
+  (Our items do expose the stored bytes, read-only, for sync tools:
+  [API_DESIGN §3.1, "The stored form"](API_DESIGN.md#the-stored-form).)
 - The *cache-then-sync* model (edit an in-memory list, call `sync()` to write
   it back) is exactly what a local-file backend (2.2) needs, and exactly wrong
   for CalDAV. icalcli handles the mismatch with `sync_after_edit`. That flag is
@@ -436,6 +438,16 @@ Consequences:
 - The licence files, `COPYING.GPL` and `COPYING.APACHE` as in `caldav`, were
   added on 2026-10-05; 1.5 lists them in `license-files`.
 
+**Under reconsideration (author, 2026-10-12): AGPL-3.0-or-later for the whole
+library.** [edit-icalendar](https://github.com/pycalendar/edit-icalendar),
+where splitting a series ("this and future") is assumed to go
+([API spec §3.7](API_DESIGN.md#37-recurrence)), is AGPL-3.0 and will be a
+hard dependency even so. That makes every installation contain AGPL code,
+as `icalendar-searcher` did before its relicensing, and the Apache-2.0
+option above becomes theoretical again. Whether edit-icalendar changes its
+licence is asked in [its issue 5](https://github.com/pycalendar/edit-icalendar/issues/5).
+Until that is settled, nothing above changes.
+
 ### D4. Python version floor
 
 What the ecosystem uses today: `caldav`, `icalendar`, `icalendar-searcher`,
@@ -518,10 +530,12 @@ Why:
 - The desktop PIM stacks that solved this problem made the same choice (§1.6).
 - It gives pass-through of unknown properties for free (Part 2).
 
-The friendly object model 1.1 designs (`task.due`, `task.estimate`, …) is a
+The object model 1.1 designs (`task.component.DUE`, `task.component.summary`, …) is a
 typed view *over* the iCalendar component, not a separate model with its own
 storage. That keeps round-tripping lossless, which Home Assistant's two-status
-`TodoItem` (§1.4) shows is the thing a thin model loses first.
+`TodoItem` (§1.4) shows is the thing a thin model loses first. (1.1 went further and
+dropped its own fields: the item exposes `icalendar`'s typed properties
+through `item.component`; [API spec §3.1](API_DESIGN.md#31-the-base-a-typed-view-over-icalendar).)
 
 The author's view is that `icalendar` is good enough, with one condition: the
 [0.1 survey](TASK_MODEL_SURVEY.md) proposes fields that RFC 5545 has no

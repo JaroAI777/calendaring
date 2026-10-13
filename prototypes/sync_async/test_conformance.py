@@ -1,4 +1,4 @@
-"""One conformance suite, driving all five prototypes in both modes.
+"""One conformance suite, driving all six prototypes in both modes.
 
 This file *is* one of the measurements.  The roadmap asks whether a single test
 suite can drive both modes; the answer for every candidate is yes, and this
@@ -28,9 +28,12 @@ from p4_codegen._async import buggy as p4_async_buggy
 from p4_codegen._async import tasks as p4_async
 from p4_codegen._sync import buggy as p4_sync_buggy
 from p4_codegen._sync import tasks as p4_sync
+from p5_adapter import adapter as p5
+from p5_adapter._async import ops as p5_async
+from p5_adapter._sync import ops as p5_sync
 from common import AsyncFileTransport, AsyncTransport, FileStore, Store, SyncTransport
 
-PROTOCOLS = ["p1_dual_mode", "p2_sansio", "p2_typed", "p3_greenlet", "p4_codegen"]
+PROTOCOLS = ["p1_dual_mode", "p2_sansio", "p2_typed", "p3_greenlet", "p4_codegen", "p5_adapter"]
 MODES = ["sync", "async"]
 
 
@@ -60,7 +63,20 @@ def make_collection(proto: str, mode: str, store: Store, transport: Any = None) 
             if mode == "async"
             else p4_sync.SyncCollection(transport)
         )
+    if proto == "p5_adapter":
+        return (
+            p5_async.AsyncCollection(transport)
+            if mode == "async"
+            else p5_sync.SyncCollection(transport)
+        )
     return p3_greenlet.Collection(transport)
+
+
+def io(proto: str, mode: str, task: Any) -> Any:
+    """Where an item's I/O methods are: on the item, or on p5's facade."""
+    if proto != "p5_adapter":
+        return task
+    return task.aio if mode == "async" else task.sync
 
 
 @pytest.fixture(params=PROTOCOLS)
@@ -98,7 +114,7 @@ async def test_save(proto: str, mode: str, store: Store) -> None:
     coll = make_collection(proto, mode, store)
     task = await maybe_await(coll.get_task("task-1"))
     task.summary = "changed"
-    await maybe_await(task.save())
+    await maybe_await(io(proto, mode, task).save())
     assert store.tasks["task-1"]["summary"] == "changed"
 
 
@@ -117,7 +133,7 @@ async def test_composed_write_actually_writes(proto: str, mode: str, store: Stor
     """I/O, then logic, then I/O.  This is the caldav bug shape."""
     coll = make_collection(proto, mode, store)
     task = await maybe_await(coll.get_task("task-1"))
-    await maybe_await(task.complete())
+    await maybe_await(io(proto, mode, task).complete())
     assert store.tasks["task-1"]["status"] == "COMPLETED"
 
 
@@ -142,8 +158,8 @@ async def test_uncomplete_actually_writes(
         )
     coll = make_collection(proto, mode, store)
     task = await maybe_await(coll.get_task("task-1"))
-    await maybe_await(task.complete())
-    result = await maybe_await(task.uncomplete())
+    await maybe_await(io(proto, mode, task).complete())
+    result = await maybe_await(io(proto, mode, task).uncomplete())
     assert result.status == "NEEDS-ACTION"
     assert store.tasks["task-1"]["status"] == "NEEDS-ACTION"
 
@@ -199,7 +215,7 @@ async def test_filesystem_backend(proto: str, mode: str, tmp_path: Path) -> None
     assert len(tasks) == 5
     task = await maybe_await(coll.get_task("task-2"))
     task.summary = "written to disk"
-    await maybe_await(task.save())
+    await maybe_await(io(proto, mode, task).save())
     assert "written to disk" in (tmp_path / "task-2.json").read_text()
 
 

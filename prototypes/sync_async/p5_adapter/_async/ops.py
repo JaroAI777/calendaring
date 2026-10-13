@@ -1,0 +1,102 @@
+# Hand-written source; generate.py derives ../_sync/ from this file.
+"""p5's I/O, written once in async form; ``_sync/ops.py`` is generated.
+
+The facade is what ``item.aio`` returns (``item.sync`` in the generated copy).
+It holds the adapter by composition rather than being a subclass of the data,
+which is the only structural difference from p4's ``AsyncTask``.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from common import AsyncTransport, Request, Task
+from p5_adapter.adapter import AsyncMode, GatherMode, Immediate, ModeError, TaskAdapter
+
+
+class AsyncCollection:
+    def __init__(self, transport: AsyncTransport) -> None:
+        self._transport = transport
+        self.facade_class = AsyncFacade
+        self.strategy = Immediate(self, AsyncMode)
+
+    def _wrap(self, d: dict[str, Any]) -> TaskAdapter[AsyncMode]:
+        return TaskAdapter(Task.from_dict(d), self.strategy)
+
+    async def get_task(self, uid: str) -> TaskAdapter[AsyncMode]:
+        resp = await self._transport.request(Request("GET", f"/tasks/{uid}"))
+        if resp.status == 404:
+            raise KeyError("no such task")
+        return self._wrap(resp.body)
+
+    async def search(self) -> list[TaskAdapter[AsyncMode]]:
+        out: list[TaskAdapter[AsyncMode]] = []
+        cursor: int | None = 0
+        while cursor is not None:
+            resp = await self._transport.request(Request("GET", f"/search?cursor={cursor}"))
+            out.extend(self._wrap(d) for d in resp.body["items"])
+            cursor = resp.body["next"]
+        return out
+
+
+class AsyncFacade:
+    def __init__(self, item: TaskAdapter[Any], collection: AsyncCollection) -> None:
+        self._item = item
+        self._collection = collection
+
+    async def save(self) -> TaskAdapter[Any]:
+        item = self._item
+        await self._collection._transport.request(
+            Request("PUT", f"/tasks/{item.uid}", item._data.to_json())
+        )
+        item.dirty = False
+        return item
+
+    async def complete(self) -> TaskAdapter[Any]:
+        fresh = await self._collection.get_task(self._item.uid)
+        self._item._data.summary = fresh.summary
+        self._item._data.status = "COMPLETED"
+        await self.save()
+        return self._item
+
+    async def uncomplete(self) -> TaskAdapter[Any]:
+        self._item._data.status = "NEEDS-ACTION"
+        await self.save()
+        return self._item
+
+
+class AsyncGather:
+    """Modes 2 of the review: record what needs writing, write it on flush().
+
+    Queueing is mode-free; only ``flush`` does I/O, so it is the only method
+    that differs between the async source and the generated sync copy.
+    Repeated modifications of one item coalesce into one ``save``.
+    """
+
+    def __init__(self, collection: AsyncCollection) -> None:
+        self.collection = collection
+        self.mode = GatherMode
+        self.queue: list[tuple[TaskAdapter[Any], str]] = []
+
+    def track(self, item: TaskAdapter[Any]) -> TaskAdapter[GatherMode]:
+        """Rebind an item to this strategy; returns the same object, retyped."""
+        item._strategy = self
+        return item  # type: ignore[return-value]
+
+    def require(self, mode: type, via: str) -> None:
+        raise ModeError(f"{via} on a gathered item; call flush() instead")
+
+    def facade(self, item: TaskAdapter[Any]) -> AsyncFacade:
+        return self.collection.facade_class(item, self.collection)
+
+    def notify(self, item: TaskAdapter[Any]) -> None:
+        self.submit(item, "save")
+
+    def submit(self, item: TaskAdapter[Any], op: str) -> None:
+        if (item, op) not in self.queue:
+            self.queue.append((item, op))
+
+    async def flush(self) -> None:
+        while self.queue:
+            item, op = self.queue.pop(0)
+            await getattr(self.facade(item), op)()

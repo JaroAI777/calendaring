@@ -177,7 +177,9 @@ prototyping.
 **Tasks:**
 - [x] **Settle the name.** `calendaring`, the same on GitHub, PyPI and as the
       import name (D2). It does not signal task support by itself; the
-      tagline carries that. Free on PyPI as of 2026-10-05.
+      tagline carries that. Free on PyPI as of 2026-10-05. (this decision may need
+	  reversal, the rest of the team thinks it's not intuitive what a "calendaring"-
+	  package is doing)
 - [x] **Write up the packaging principle.** (D1) Two questions a reviewer will ask are
       already decided, and both follow from one principle: logic unrelated to the
       CalDAV protocol does not belong in the `caldav` library.
@@ -209,28 +211,29 @@ prototyping.
 - **Priority:** Critical
 - **Estimated effort:** 20 hours
 - **Dependencies:** 0.1, 0.2, 0.3
-- **Deliverable:** a documented API specification, peer-reviewed
+- **Deliverable:** a documented API specification, peer-reviewed —
+  [API_DESIGN.md](API_DESIGN.md) (drafted 2026-10-08; peer-reviewed in [PR 5](https://github.com/pycalendar/calendaring/pull/5) and in video calls, 2026-10-10 – 2026-10-13)
 
 The API should feel familiar to caldav users without being a CalDAV API in
 disguise. The test of the design is not "does it fit CalDAV" but "does it fit
 CalDAV *and* a Gitea issue tracker without lying about either".
 
 **Tasks:**
-- [ ] Define the object model: client, account, collection, calendar object,
+- [x] Define the object model: workspace, backend, collection, calendar object,
       task, event, journal
-- [ ] Define the search/filter interface, reusing `icalendar-searcher` so that
+- [x] Define the search/filter interface, reusing `icalendar-searcher` so that
       client-side and server-side filtering behave identically
-- [ ] Define the capability-declaration mechanism: how a caller asks a backend
+- [x] Define the capability-declaration mechanism: how a caller asks a backend
       what it can do, and what happens when it asks for something unsupported
       (raise, degrade, or emulate client-side — and how the caller chooses)
-- [ ] Define error taxonomy and the exception hierarchy
-- [ ] Define change detection across backends with no ETag (mtime, revision
+- [x] Define error taxonomy and the exception hierarchy
+- [x] Define change detection across backends with no ETag (mtime, revision
       counters, or nothing)
-- [ ] Define the escape hatch: how a caller reaches backend-specific functionality
+- [x] Define the escape hatch: how a caller reaches backend-specific functionality
       without the abstraction pretending it does not exist
-- [ ] Incorporate the task model from 0.1; fields with no standard property
+- [x] Incorporate the task model from 0.1; fields with no standard property
       are stored as `X-` properties (0.3, D6)
-- [ ] Peer review, and revise. Identify and approach reviewers early — a review
+- [x] Peer review, and revise. Identify and approach reviewers early — a review
       is a dependency on someone else's calendar, not a quantity of work.
 
 ---
@@ -307,6 +310,8 @@ therefore has a committed downstream consumer and should not be trimmed.
 - [ ] Config file discovery (XDG paths, explicit path, environment)
 - [ ] Credential handling: keyring integration, and never requiring secrets in
       plaintext config
+- [ ] Settle the shared file with the caldav and calendaring-jmap
+      maintainers: see [CONFIGURATION_PROPOSAL.md](CONFIGURATION_PROPOSAL.md)
 - [ ] Check existing conventions first — `caldav`, `plann`, `vdirsyncer`, `khal`, etc — rather
       than inventing a fifth format (probably build on the caldav format)
 - [ ] Document the format
@@ -403,6 +408,9 @@ disagree.
       this layer at all (see 0.2's comparison, *What is not settled*), and
       every caldav name needs a replacement-map entry so the generated sync
       layer imports names that exist (`SyncDAVClient` does not)
+- [ ] Settle [API_DESIGN Q12](API_DESIGN.md#10-open-questions) (`delete()` on an
+      occurrence, and conflicts between sibling occurrences) before mapping
+      `delete()` and `save()` for occurrences
 - [ ] Pass the conformance suite
 - [ ] Record, do not silently fix, bugs found in `caldav` itself: those fixes are
       caldav's budget, not this project's
@@ -489,6 +497,8 @@ express this backend without contortion, the finding is more valuable than the c
 
 **Tasks:**
 - [ ] Implement the tracker recommended by 0.1
+- [ ] Run Gitea as a CI service container (official image, SQLite) for the
+      conformance suite; a permanent instance is optional, for dogfooding
 - [ ] Auth, pagination and rate limiting for that tracker's API
 - [ ] Map its task model to the library's, and record every lossy mapping
 - [ ] Pass the conformance suite, with unsupported operations failing as specified
@@ -788,6 +798,8 @@ Everything below is in the README's ambition but **outside the 248 funded hours*
 | jCal (RFC 7265) and xCal (RFC 6321) representations | 16–24 h | Format work, not backend work |
 | Proprietary systems | unbounded | README's position: pull requests welcome, no effort committed |
 | Completing the `plann` migration | 24–40 h | 3.3 buys evidence; this buys the migration |
+| `vobject` and `ical` representations | unknown | Conversion helpers, and borrowing another library's object (lend it out, parse it back on exit; not the change tracking of API_DESIGN Q13). Raw data in and out (`from_ical()`, `to_ical()`, `replace_ical()`) is in the funded API; see [API_DESIGN, Raw data and other libraries](API_DESIGN.md#raw-data-and-other-libraries). Mentioned so that it is not added ad hoc |
+| Implicit synchronization | unknown | Edits reach the backends without an explicit `save()`; change tracking and write strategies, [API_DESIGN Q13](API_DESIGN.md#10-open-questions). Agreed in the [PR 5 video meeting](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6122366863): wanted, but not a priority. The funded API keeps `save()` and `reload()` explicit |
 
 ---
 

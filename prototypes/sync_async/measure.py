@@ -324,6 +324,8 @@ def main() -> None:
         "p3 greenlet": ["p3_greenlet.py"],
         "p4 unasync, hand-written": ["p4_codegen/_async/tasks.py"],
         "p4 unasync, generated": ["p4_codegen/_sync/tasks.py"],
+        "p5 adapter, hand-written": ["p5_adapter/adapter.py", "p5_adapter/_async/ops.py"],
+        "p5 adapter, generated": ["p5_adapter/_sync/ops.py"],
     }
     for label, names in files.items():
         total = sum(code_lines(HERE / n) for n in names)
