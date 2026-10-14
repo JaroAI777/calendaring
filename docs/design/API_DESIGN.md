@@ -466,7 +466,7 @@ none), `add_event(...)` raises `UnsupportedError(Feature.COMPONENT_EVENT)`.
 class Item:
     icalendar: icalendar.Calendar       # the whole VCALENDAR, VTIMEZONEs included
     component: icalendar.Component      # the one that describes the item; see "What an item contains"
-                                        # (a tracked subclass of Todo/Event/Journal, §10 Q13)
+                                        # (an icalendar Todo/Event/Journal)
 
     uid: str                            # read-only: component's UID; identity, see "Identity"
     native_id: str | None               # backend's own id; None until stored
@@ -559,10 +559,9 @@ Raw iCalendar text goes in and out through explicit methods, named as in
   new data must describe the same item: the same `UID`, the same
   component type, the same kind of item (a row of the table in
   [What an item contains](#what-an-item-contains)), and on an occurrence
-  the same `RECURRENCE-ID`, or it raises `ValueError`. It parses into the
-  tracked subclass of [§10](#10-open-questions) Q13, so `item.component`
-  becomes a new object: a reference kept from before is stale, and writes
-  through it are lost. It counts as an edit, so `save()` writes it, and
+  the same `RECURRENCE-ID`, or it raises `ValueError`. It parses the data
+  anew, so `item.component` becomes a new object: a reference kept from before is stale, and writes
+  through it are lost. `save()` writes it, as it writes any item, and
   like any edit it leaves `wire` and `native` as they were read. This is
   caldav's `obj.data = text; obj.save()`.
 
@@ -711,8 +710,8 @@ Rules for bound items:
 Factories, which library users call instead of constructors:
 `Task.new(summary=..., end=..., **properties)`, `Task.from_ical(data)` (a
 string or bytes) and `Task.from_icalendar(calendar)` (an
-`icalendar.Calendar` already parsed; the item stores a converted copy, so
-later changes to the caller's object do not reach it, §10 Q13). The `uid` defaults to a fresh UUID,
+`icalendar.Calendar` already parsed; the item stores a copy, so
+later changes to the caller's object do not reach it). The `uid` defaults to a fresh UUID,
 as `icalendar.Todo.new` does. Bound items come only from a collection
 ([§1.1 Sync and async](#11-sync-and-async)).
 
@@ -1618,43 +1617,24 @@ marked as not blocking; none blocks
       `SEQUENCE` or `LAST-MODIFIED`. A generated occurrence has no override,
       and a concurrent edit of the master (its `RRULE`, its `DTSTART`)
       changes it too, so there the check is the master's.
-13. *Decided, 2026-10-12:* **Change tracking** (the reviewer's "borrowing",
+13. *Decided, 2026-10-15* **Change tracking** (the reviewer's "borrowing",
     [PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4237509309)).
 
-    **Writes are explicit.** The funded API has explicit `save()` and
-    `reload()`, and `save()` is the primitive any later layer is built on
+    **Decision: explicit and unconditional saves are enough for the
+    funded roadmap.** `save()` and `reload()` are explicit, and `save()`
+    always writes, whether or not the item was edited. `save()` is the
+    primitive any later layer is built on
     ([PR 5 video meeting](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6122366863)).
-    Tracking is still needed: it tells `save()` whether the item changed
-    since it was read; a later patch-style merge would also need which
-    properties did (Q14). Writing without an
-    explicit `save()` is [§12](#12-beyond-the-funded-scope-implicit-synchronization).
+    There is no tracked `component` subclass, and no dependency on
+    [icalendar issue 1914](https://github.com/collective/icalendar/issues/1914).
 
-    **Writes are tracked through `component`.** The item has no properties
-    of its own ([§3.1](#31-the-base-a-typed-view-over-icalendar)), so a
-    write through `item.component` has to be seen there. `component` is
-    this library's subclass of `icalendar.Todo` / `Event` / `Journal`,
-    which overrides `__setitem__`, `__delitem__`, `pop` and `update` to
-    mark the item dirty. The typed path, `task.component.summary = x`, is
-    then also the tracked path, with no property list repeated here and no
-    loss of static types. Against `icalendar` 7.3.1.dev188, every
-    typed-property write tried (`summary`, `status`, `DUE`, `DURATION`,
-    `DTSTART`, `categories`, `add()`, `del`) goes through those methods.
-
-    - **Needed from `icalendar`:** parsing into the subclass, proposed in
-      [icalendar issue 1914](https://github.com/collective/icalendar/issues/1914)
-      as a `ComponentFactory` and `Component.convert_to(factory)`, which
-      `Task.from_icalendar()` would use on a copy of the caller's
-      `Calendar`, and `replace_ical()` on what it parses; and a tested, documented promise that all writes go
-      through those methods.
-    - **Known gaps:** an in-place change
-      (`task.component.categories.append(...)`) calls no setter, so
-      `save()` still compares a `to_ical()` snapshot as the backstop; and a
-      typo (`component.sumary = x`) is accepted silently.
-    - **Rejected:** delegating unknown item attributes to `component`
-      (`task.summary` would be `Any` to type checkers), with or without
-      renaming it `_component`, and a generated typing stub (code
-      generation). The comparison is in git history, as
-      `docs/design/WIP_ITEM_DELEGATION.md`.
+    **What needs a change check.** Saving only an edited item, direct
+    access to properties, and implicit saves
+    ([§12](#12-beyond-the-funded-scope-implicit-synchronization)) all need
+    a way to check whether the `icalendar` data has changed. They are
+    beyond the funded scope. Some enhancements may be needed in
+    `icalendar` so we know whether a calendar was changed or not, see
+    [icalendar issue 1922](https://github.com/collective/icalendar/issues/1922).
 14. *Deferred to edit-icalendar, 2026-10-13:* **Writing through `component` on a recurrence set with overrides.**
     The trap is documented in
     [What an item contains](#what-an-item-contains), and the fix is left to
@@ -1670,8 +1650,7 @@ marked as not blocking; none blocks
     starts a new one (`THIS_AND_FUTURE`). Another option for then, or a
     stopgap before it, is for `save()` to warn when the master changed and
     the stored object has overrides.
-    The tracked `component` (Q13) lets `save()` see *which* properties
-    changed, which a patch-style merge needs.
+    A patch-style merge needs to know *which* properties changed.
 
 ---
 
@@ -1685,9 +1664,10 @@ the item base class is `Item` and carries no iCalendar properties of
 its own ([§3.1](#31-the-base-a-typed-view-over-icalendar)); what an item may
 hold is spelled out ([What an item contains](#what-an-item-contains)); the
 occurrence merge goes to `recurring_ical_events` (Q3); and change tracking is
-Q13, which has decided how writes are tracked (a tracked subclass of the
-`icalendar` components, pending icalendar issue 1914) and defers his
-question about transactions along with implicit synchronization ([§12](#12-beyond-the-funded-scope-implicit-synchronization)). The video meeting of
+Q13, which decided on 2026-10-12 how writes are tracked (a tracked subclass
+of the `icalendar` components, pending icalendar issue 1914; replaced on
+2026-10-15 by unconditional saves), and [§12](#12-beyond-the-funded-scope-implicit-synchronization)
+takes his question about transactions along with implicit synchronization. The video meeting of
 2026-10-12 kept `save()` and `reload()` explicit and moved implicit
 synchronization beyond the funded scope. His proposal of per-mode adapters (`item.sync.save()`) was
 prototyped and not adopted
@@ -1729,8 +1709,15 @@ background. The
 [p5 prototype](SYNC_ASYNC_ARCHITECTURE.md#12-revisited-the-adapter-pattern-2026-10-10)
 shows gather-and-flush working in both modes without duplicated I/O.
 
-**Knowing that an item changed.** The tracked `component` of Q13 marks
-the item dirty on every setter, with an in-place change as its known gap.
+**Knowing that an item changed.** Implicit writes need this, as do
+saving only an edited item and direct access to properties (Q13). The
+simplest check needs nothing from `icalendar`: compare `to_ical()` with
+the serialisation taken when the item was read, at the cost of one
+extra serialisation per read. (Not with `wire`: `to_ical()` often
+differs from the server's bytes, as it normalises folding, order and
+quoting, and `wire` is `None` on occurrences and on backends with no
+per-item text.) A tracked `component` subclass would mark the item
+dirty on every setter instead, with an in-place change as its known gap.
 [icalendar issue 1922](https://github.com/collective/icalendar/issues/1922)
 offers another way: compare the component with a deep-copied snapshot
 (`was_modified_since()`), which also catches in-place changes. A yes/no

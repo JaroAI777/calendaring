@@ -833,7 +833,8 @@ Results (`test_conformance.py`, `test_p5_adapter.py`, 141 passed):
   `item.icalendar` public and the storage, so this is the normal case, not
   an edge case. Reliable tracking needs change notification in `icalendar`
   itself. (Since decided differently: a tracked subclass of the `icalendar`
-  components, [API spec Q13](API_DESIGN.md#10-open-questions).)
+  components, [API spec Q13](API_DESIGN.md#10-open-questions); replaced
+  on 2026-10-15 by unconditional saves.)
 - **Size**, in code lines: p4's `_async/tasks.py` is 40. p5's
   `_async/ops.py` is 66 (gather included) and `adapter.py` is 87 (a property
   pair per field, borrowing, modes, strategies). The property pairs
@@ -863,9 +864,10 @@ Results (`test_conformance.py`, `test_p5_adapter.py`, 141 passed):
   class has to serve more than one mode.
 - **Change tracking and write strategies** are a feature, not an
   architecture, and the leak blocks them until `icalendar` can notify. They
-  go to the API spec's open questions, where Q13 has since closed the leak
-  with a tracked component subclass instead of notification (write
-  strategies are now [API spec §12](API_DESIGN.md#12-beyond-the-funded-scope-implicit-synchronization)).
+  go to the API spec's open questions. Q13 first closed the leak with a
+  tracked component subclass instead of notification, then decided on
+  2026-10-15 that the funded API saves unconditionally and tracks nothing
+  (write strategies are now [API spec §12](API_DESIGN.md#12-beyond-the-funded-scope-implicit-synchronization)).
 
 ---
 
