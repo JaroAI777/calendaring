@@ -51,3 +51,23 @@ def test_no_renamed_name_inside_an_f_string() -> None:
         for path in (root / "_async").rglob("*.py"):
             for number, line in enumerate(path.read_text().splitlines(), 1):
                 assert not RENAMED_IN_FSTRING.search(line), f"{path}:{number}: move the name out of the f-string"
+
+
+# The Go convention (golang.org/s/generatedcode), in Python comment syntax:
+# tools that skip generated code look for this line near the top of the file.
+GENERATED_HEADER = re.compile(r"^# Code generated .* DO NOT EDIT\.$")
+
+
+def test_generated_files_carry_the_standard_header() -> None:
+    for root in generate_sync.ROOTS:
+        for path in (root / "_sync").rglob("*.py"):
+            first = path.read_text().splitlines()[:1]
+            assert first, f"{path} is empty"
+            assert GENERATED_HEADER.match(first[0]), f"{path}: {first[0]!r}"
+
+
+def test_an_empty_async_source_is_refused(tmp_path: Path) -> None:
+    (tmp_path / "_async").mkdir()
+    (tmp_path / "_async" / "empty.py").write_text("")
+    with pytest.raises(ValueError, match="empty"):
+        generate_sync.generate(tmp_path)
