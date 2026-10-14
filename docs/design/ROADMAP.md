@@ -328,11 +328,11 @@ Modest, because the author has an established pattern to copy from
 `icalendar-searcher` and `caldav` as well as other pycal-projects.
 
 **Tasks:**
-- [ ] `pyproject.toml`, hatch with tag-derived versioning
-- [ ] ruff and pre-commit, matching the sibling projects
-- [ ] CI matrix across supported Python versions
-- [ ] PyPI publishing workflow
-- [ ] `license-files` for the `COPYING.*` already in place (0.3, D3), SECURITY.md,
+- [x] `pyproject.toml`, hatch with tag-derived versioning
+- [x] ruff and pre-commit, matching the sibling projects
+- [x] CI matrix across supported Python versions
+- [x] PyPI publishing workflow (`publish.yml`, registered as the trusted publisher on pypi.org)
+- [x] `license-files` for the `COPYING.*` already in place (0.3, D3), SECURITY.md,
       a towncrier changelog (0.3, D7)
 
 ---

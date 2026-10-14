@@ -1,0 +1,131 @@
+[build-system]
+requires = ["hatchling>=1.27", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "calendaring"
+dynamic = ["version"]
+description = "One Python API for calendars and task lists: CalDAV, iCalendar files and feeds, JMAP and issue trackers"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later OR Apache-2.0"
+license-files = ["COPYING.*"]
+authors = [{ name = "Tobias Brox", email = "tobias@redpill-linpro.com" }]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Office/Business :: Scheduling",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+# ruff and mypy are pinned exactly; keep ruff in step with .pre-commit-config.yaml
+dev = ["pytest>=8.0", "ruff==0.17.0", "mypy==2.4.0", "pre-commit>=4.0", "towncrier>=25.8"]
+
+[project.urls]
+Repository = "https://github.com/pycalendar/calendaring"
+Issues = "https://github.com/pycalendar/calendaring/issues"
+Changelog = "https://github.com/pycalendar/calendaring/blob/main/docs/changelog.rst"
+
+[tool.hatch.version]
+source = "vcs"
+# Only v<digit>* tags are releases. The default describe matches any tag
+# containing a digit, so a date-stamped local tag on HEAD (a pre-rewrite
+# backup, say) became the version and broke every build.
+raw-options = { scm = { git = { describe_command = "git describe --dirty --tags --long --abbrev=40 --match v[0-9]*" } } }
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/calendaring/_version.py"
+
+[tool.hatch.build.targets.sdist]
+# The prototypes are research for roadmap 0.2, not part of the package.
+# tmp-* are the author's untracked scratch notes and must never be shipped.
+exclude = ["/prototypes", "/.github", "/.claude", "tmp-*", "*~", "*.bak"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+# The 0.2 prototypes are frozen research code with their own conventions, and
+# the design documents align their code comments by hand.
+extend-exclude = ["prototypes", "docs/design"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "PT"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["calendaring"]
+
+[tool.mypy]
+# The package ships py.typed and says Typing :: Typed, so CI checks it.
+strict = true
+# Check as the oldest supported Python, like ruff's target-version
+python_version = "3.11"
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+# Treat warnings as errors - tests should run clean (roadmap 1.3 demands it too)
+filterwarnings = ["error"]
+norecursedirs = ["prototypes", "docs", "build"]
+
+[tool.towncrier]
+# Same layout as calendaring-jmap, the pycalendar organisation's standard (D7).
+directory = "news/"
+filename = "docs/changelog.rst"
+issue_format = "`#{issue} <https://github.com/pycalendar/calendaring/issues/{issue}>`_"
+start_string = ".. towncrier release notes start\n"
+title_format = "{version} ({project_date})"
+underlines = ["-", "~", "`"]
+
+[[tool.towncrier.type]]
+directory = "breaking"
+name = "Breaking changes"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "removal"
+name = "Removals and deprecations"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "feature"
+name = "New features"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "bugfix"
+name = "Bug fixes"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "documentation"
+name = "Documentation"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "deps"
+name = "Dependency changes"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "internal"
+name = "Internal changes"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "chore"
+name = "Other tasks"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "security"
+name = "Security fixes"
+showcontent = true
