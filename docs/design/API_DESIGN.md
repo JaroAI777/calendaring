@@ -362,7 +362,7 @@ have to write to the server as a side effect, so renaming is an explicit
 `set_name()`, which raises `UnsupportedError` where the backend cannot
 rename (a feed, a single `.ics` file). The same goes for items: there is no
 `collection.save()` without an argument, and no autosave (but see
-[§10](#10-open-questions), Q13). This follows caldav, which settled on
+[§12](#12-beyond-the-funded-scope-implicit-synchronization)). This follows caldav, which settled on
 methods for anything that talks to the server. *Proposed by the author in
 the [PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4237526933);
 open to the reviewer.*
@@ -1618,18 +1618,16 @@ marked as not blocking; none blocks
       `SEQUENCE` or `LAST-MODIFIED`. A generated occurrence has no override,
       and a concurrent edit of the master (its `RRULE`, its `DTSTART`)
       changes it too, so there the check is the master's.
-13. *Decided, 2026-10-12:* **Change tracking and write strategies** (the reviewer's "borrowing",
+13. *Decided, 2026-10-12:* **Change tracking** (the reviewer's "borrowing",
     [PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4237509309)).
 
     **Writes are explicit.** The funded API has explicit `save()` and
     `reload()`, and `save()` is the primitive any later layer is built on
     ([PR 5 video meeting](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6122366863)).
-    Implicit synchronization, where an edit marks the item dirty and a
-    strategy writes at once, gathers and flushes on request, or syncs in
-    the background, is wanted but not a priority, and is
-    [beyond the funded scope](ROADMAP.md#beyond-the-funded-scope). The
-    [p5 prototype](SYNC_ASYNC_ARCHITECTURE.md#12-revisited-the-adapter-pattern-2026-10-10)
-    shows gather-and-flush working in both modes without duplicated I/O.
+    Tracking is still needed: it tells `save()` whether the item changed
+    since it was read; a later patch-style merge would also need which
+    properties did (Q14). Writing without an
+    explicit `save()` is [§12](#12-beyond-the-funded-scope-implicit-synchronization).
 
     **Writes are tracked through `component`.** The item has no properties
     of its own ([§3.1](#31-the-base-a-typed-view-over-icalendar)), so a
@@ -1657,16 +1655,6 @@ marked as not blocking; none blocks
       renaming it `_component`, and a generated typing stub (code
       generation). The comparison is in git history, as
       `docs/design/WIP_ITEM_DELEGATION.md`.
-    - **Transactions, deferred with implicit synchronization.** The
-      reviewer asked for edits spanning several calls, or several items, to
-      behave
-      [like a transaction](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6113054014).
-      Gather-and-flush would hold writes until the flush, but no backend
-      here has a multi-object transaction (CalDAV writes one resource per
-      request, and JMAP `/set` applies and reports each object on its own,
-      RFC 8620 §5.3). A flush that fails halfway would have to report which
-      writes were stored, as fan-out's `MultiResult` does
-      ([§2.1](#21-workspace)), rather than promise atomicity.
 14. *Deferred to edit-icalendar, 2026-10-13:* **Writing through `component` on a recurrence set with overrides.**
     The trap is documented in
     [What an item contains](#what-an-item-contains), and the fix is left to
@@ -1699,7 +1687,7 @@ hold is spelled out ([What an item contains](#what-an-item-contains)); the
 occurrence merge goes to `recurring_ical_events` (Q3); and change tracking is
 Q13, which has decided how writes are tracked (a tracked subclass of the
 `icalendar` components, pending icalendar issue 1914) and defers his
-question about transactions along with implicit synchronization. The video meeting of
+question about transactions along with implicit synchronization ([§12](#12-beyond-the-funded-scope-implicit-synchronization)). The video meeting of
 2026-10-12 kept `save()` and `reload()` explicit and moved implicit
 synchronization beyond the funded scope. His proposal of per-mode adapters (`item.sync.save()`) was
 prototyped and not adopted
@@ -1726,6 +1714,37 @@ from a sync tool's side on 2026-10-11, in PR 5 and in
 What it changed: the JMAP etag, the full CalDAV listing, complete change
 sets, `SyncTokenError`, the create clashes, no retried writes and the etag
 after a write ([§10](#10-open-questions), Q11).
+
+## 12. Beyond the funded scope: implicit synchronization
+
+Wanted, but not a priority, and
+[beyond the funded scope](ROADMAP.md#beyond-the-funded-scope)
+([PR 5 video meeting](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6122366863)).
+The funded API keeps `save()` and `reload()` explicit (§10 Q13), and
+anything here is built on `save()`.
+
+**Write strategies.** An edit marks the item dirty, and a strategy
+writes at once, gathers and flushes on request, or syncs in the
+background. The
+[p5 prototype](SYNC_ASYNC_ARCHITECTURE.md#12-revisited-the-adapter-pattern-2026-10-10)
+shows gather-and-flush working in both modes without duplicated I/O.
+
+**Knowing that an item changed.** The tracked `component` of Q13 marks
+the item dirty on every setter, with an in-place change as its known gap.
+[icalendar issue 1922](https://github.com/collective/icalendar/issues/1922)
+offers another way: compare the component with a deep-copied snapshot
+(`was_modified_since()`), which also catches in-place changes. A yes/no
+answer is enough here; no diff is needed.
+
+**Transactions.** The reviewer asked for edits spanning several calls,
+or several items, to behave
+[like a transaction](https://github.com/pycalendar/calendaring/pull/5#issuecomment-6113054014).
+Gather-and-flush would hold writes until the flush, but no backend here
+has a multi-object transaction (CalDAV writes one resource per request,
+and JMAP `/set` applies and reports each object on its own, RFC 8620
+§5.3). A flush that fails halfway would have to report which writes were
+stored, as fan-out's `MultiResult` does ([§2.1](#21-workspace)), rather
+than promise atomicity.
 
 ---
 

@@ -864,7 +864,8 @@ Results (`test_conformance.py`, `test_p5_adapter.py`, 141 passed):
 - **Change tracking and write strategies** are a feature, not an
   architecture, and the leak blocks them until `icalendar` can notify. They
   go to the API spec's open questions, where Q13 has since closed the leak
-  with a tracked component subclass instead of notification.
+  with a tracked component subclass instead of notification (write
+  strategies are now [API spec §12](API_DESIGN.md#12-beyond-the-funded-scope-implicit-synchronization)).
 
 ---
 
