@@ -151,9 +151,16 @@ class Item:
             raise InvalidDataError("an item holds the components of exactly one UID")
         by_name = {"VTODO": Task, "VEVENT": Event, "VJOURNAL": Journal}
         try:
-            return by_name[names.pop()]
+            klass = by_name[names.pop()]
         except KeyError as exc:
             raise InvalidDataError(f"not an item component: {exc}") from None
+        # component is typed as the icalendar subclass; a hand-built plain
+        # Component with the right name would not have its attributes
+        expected = klass._component_class
+        assert expected is not None
+        if not all(isinstance(c, expected) for c in components):
+            raise InvalidDataError(f"components must be icalendar.{expected.__name__}, not a plain Component")
+        return klass
 
     @staticmethod
     def _pick(calendar: _Calendar) -> tuple[_Component, bool]:
@@ -231,7 +238,7 @@ class Item:
 
     def to_ical(self) -> bytes:
         """The item as it is now, serialised by ``icalendar``.  Not ``wire``."""
-        return self.icalendar.to_ical()
+        return self.icalendar.to_ical()  # type: ignore[no-any-return]  # unannotated in icalendar 7.3
 
     def replace_ical(self, data: str | bytes) -> None:
         """New content, same identity and backend state; the data must describe the same item."""
@@ -267,6 +274,7 @@ class Event(Item):
 
     _component_name = "VEVENT"
     _component_class = icalendar.Event
+    component: icalendar.Event
 
 
 class Journal(Item):
@@ -274,6 +282,7 @@ class Journal(Item):
 
     _component_name = "VJOURNAL"
     _component_class = icalendar.Journal
+    component: icalendar.Journal
 
 
 def _decoded_datetime(component: icalendar.Component, name: str) -> datetime | None:
@@ -281,7 +290,10 @@ def _decoded_datetime(component: icalendar.Component, name: str) -> datetime | N
         return None
     prop = component[name]
     # An X- property parses as text; one this process set is already typed.
-    value = prop.dt if hasattr(prop, "dt") else icalendar.vDDDTypes.from_ical(str(prop), prop.params.get("TZID"))
+    if hasattr(prop, "dt"):
+        value = prop.dt
+    else:
+        value = icalendar.vDDDTypes.from_ical(str(prop), prop.params.get("TZID"))  # type: ignore[no-untyped-call]
     return value if isinstance(value, datetime) else None
 
 
@@ -300,6 +312,7 @@ class Task(Item):
 
     _component_name = "VTODO"
     _component_class = icalendar.Todo
+    component: icalendar.Todo
 
     native_status: str | None = None
     native_priority: str | None = None

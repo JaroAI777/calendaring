@@ -213,7 +213,7 @@ class MemoryCalendar:
         for component in _items_of(calendar):
             component.pop("UID", None)
             component.add("UID", uid)
-        return calendar.to_ical()
+        return calendar.to_ical()  # type: ignore[no-any-return]  # unannotated in icalendar 7.3
 
 
 class MemoryStore:
@@ -252,4 +252,4 @@ class MemoryStore:
         for component in _items_of(calendar):
             for name in self.silently_drop:
                 component.pop(name, None)
-        return calendar.to_ical()
+        return calendar.to_ical()  # type: ignore[no-any-return]  # unannotated in icalendar 7.3

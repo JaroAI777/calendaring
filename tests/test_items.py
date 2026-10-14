@@ -61,6 +61,17 @@ def test_what_an_item_never_holds(data: bytes) -> None:
     assert isinstance(info.value, ValueError)
 
 
+def test_a_hand_built_plain_component_is_refused() -> None:
+    # component is typed icalendar.Event; a plain Component lacks .start
+    component = icalendar.Component()
+    component.name = "VEVENT"  # type: ignore[misc]  # deliberately malformed
+    component.add("UID", "e")
+    cal = icalendar.Calendar()
+    cal.add_component(component)
+    with pytest.raises(InvalidDataError, match="icalendar.Event"):
+        Event.from_icalendar(cal)
+
+
 def test_overrides_without_master_are_split() -> None:
     a = todo("r", "RECURRENCE-ID:20261101T120000Z\r\n")
     b = todo("r", "RECURRENCE-ID:20261102T120000Z\r\n")
@@ -144,7 +155,7 @@ def test_planned_start_and_end_are_x_pycal_properties() -> None:
 
 
 def test_task_status_values_are_the_icalendar_strings() -> None:
-    assert TaskStatus.NEEDS_ACTION == "NEEDS-ACTION"
+    assert TaskStatus.NEEDS_ACTION == "NEEDS-ACTION"  # type: ignore[comparison-overlap]  # the point of the test
     assert {s.value for s in TaskStatus} >= {"PENDING", "FAILED"}
 
 

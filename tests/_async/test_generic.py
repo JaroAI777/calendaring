@@ -9,6 +9,7 @@ import pytest
 
 from calendaring import (
     AsyncBackend,
+    AsyncCollection,
     AsyncTask,
     AsyncWorkspace,
     BackendError,
@@ -78,6 +79,7 @@ async def test_wrap_takes_the_native_object() -> None:
     backend = AsyncMemoryBackend()
     collection = await backend.collection("default")
     stored = await collection.add_task(summary="x")
+    assert stored.native_id is not None
     native = (await collection.get_by_native_id(stored.native_id)).native
     assert isinstance(native, MemoryObject)
     wrapped = collection.wrap(native)
@@ -96,7 +98,7 @@ async def test_bound_to_several_collections_is_unsupported() -> None:
 
 
 class Unreachable(AsyncMemoryBackend):
-    async def collections(self) -> list:
+    async def collections(self) -> list[AsyncCollection]:
         raise BackendError("connection refused")
 
 
@@ -142,6 +144,7 @@ async def test_reload_finds_a_moved_override() -> None:
     assert str(reloaded.component["SUMMARY"]) == "moved"
     assert reloaded.is_occurrence
     generated = (await collection.search(event=True, start=at(2, 0), end=at(2, 23), expand=True))[0]
+    assert isinstance(generated, Event)
     assert (await collection.reload(generated)).component.start == at(2, 9)
 
 
