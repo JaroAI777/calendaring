@@ -372,7 +372,7 @@ the UID or the name is taken (CalDAV `CALDAV:no-uid-conflict` or a 412 on
 `If-None-Match: *`; `.taken` below says which). `save` sends the item's `etag`
 as a precondition and fails with `ConflictError` if the stored object has
 changed since it was read; `overwrite=True` drops the precondition. caldav has
-a `save()` that can be used both for adding and saving, causing a risk of 
+a `save()` that can be used both for adding and saving, causing a risk of
 lost updates.
 
 `add(native_id=...)` names the stored object (a CalDAV href such as
