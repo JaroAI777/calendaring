@@ -25,7 +25,8 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.16", "pre-commit>=4.0", "towncrier>=25.8"]
+# ruff and mypy are pinned exactly; keep ruff in step with .pre-commit-config.yaml
+dev = ["pytest>=8.0", "ruff==0.17.0", "mypy==2.4.0", "pre-commit>=4.0", "towncrier>=25.8"]
 
 [project.urls]
 Repository = "https://github.com/pycalendar/calendaring"
@@ -60,6 +61,13 @@ ignore = ["E501"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["calendaring"]
+
+[tool.mypy]
+# The package ships py.typed and says Typing :: Typed, so CI checks it.
+strict = true
+# Check as the oldest supported Python, like ruff's target-version
+python_version = "3.11"
+files = ["src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -23,6 +23,8 @@ with nothing worth mentioning can be labelled `skip-changelog`.
 ## Development setup
 
 ```
+python3 -m venv .venv
+. .venv/bin/activate
 make dev
 pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commit-msg
 make test

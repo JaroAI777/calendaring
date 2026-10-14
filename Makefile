@@ -6,11 +6,17 @@ help:  ## Show this help
 
 dev:  ## Install with dev dependencies (editable)
 	@if [ "$$(id -u)" = "0" ]; then echo "Refusing to run make dev as root"; exit 1; fi
-	PIP_BREAK_SYSTEM_PACKAGES=1 pip install -e ".[dev]"
+	@if ! python -c 'import sys; sys.exit(sys.prefix == sys.base_prefix)'; then \
+		echo "Not in a virtualenv.  Create and activate one first:"; \
+		echo "  python3 -m venv .venv && . .venv/bin/activate && make dev"; \
+		exit 1; \
+	fi
+	python -m pip install -e ".[dev]"
 
-lint:  ## Run ruff linter and formatter check
+lint:  ## Run ruff linter and formatter check, and mypy
 	python -m ruff check src/ tests/
 	python -m ruff format --check src/ tests/
+	python -m mypy
 
 format:  ## Auto-format code
 	python -m ruff check --fix src/ tests/
@@ -23,5 +29,5 @@ changelog-draft:  ## Show the change log the next release would get
 	python -m towncrier build --draft --version next
 
 clean:  ## Remove build artifacts
-	rm -rf dist/ build/ *.egg-info src/*.egg-info .pytest_cache .ruff_cache
+	rm -rf dist/ build/ *.egg-info src/*.egg-info .pytest_cache .ruff_cache .mypy_cache
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

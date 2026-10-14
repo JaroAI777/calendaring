@@ -2,7 +2,7 @@ repos:
   # === PRE-COMMIT STAGE (quick checks on every commit) ===
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.8
+    rev: v0.17.0  # same version as the ruff pin in pyproject.toml
     hooks:
       - id: ruff-check
         args: [--fix]
