@@ -16,9 +16,10 @@ and a GitHub repository should describe them once. Today:
 
 | | File | Format | Env vars |
 |---|---|---|---|
-| `caldav` | `~/.config/caldav/calendar.{conf,yaml,json}`, `/etc/caldav/…`, `CALDAV_CONFIG_FILE` | sections with `caldav_*` keys; `inherits`, `contains` (meta-sections), globs, `disable`, `${VAR}` expansion, `features:` profile | `CALDAV_*` |
+| `caldav` | the first non-empty one of `~/.config/caldav/calendar.{conf,yaml,json}`, `~/.config/calendar.conf`, `/etc/calendar.conf`, `/etc/caldav/calendar.conf`; or `CALDAV_CONFIG_FILE` | sections with `caldav_*` keys; `inherits`, `contains` (meta-sections), globs, `disable`, `${VAR}` expansion, `features:` profile | `CALDAV_*` |
 | `calendaring-jmap` | `~/.config/calendaring-jmap/calendar.yaml`, `JMAP_CONFIG_FILE` | one flat mapping: `url`, `username`, `password`, `auth_type`, `timeout` | `JMAP_*` |
 | `calendaring` | none yet (roadmap 1.4) | — | — |
+| `calendaring-sync` | none; it has no configuration of its own | | |
 | `plann` | caldav's file and parser (the parser started in plann and moved to caldav) | | |
 
 Requirements:
@@ -93,8 +94,22 @@ everything:
   `kind: jmap`, since nothing probes for JMAP.
 - A plugin backend registers a `kind` name, and its options are its own
   keys; nothing needs a prefix.
-- Environment variables (`CALDAV_*`, `JMAP_*`) still win over the file,
-  as they do in both libraries today.
+- Environment variables still win over the file.  They describe one
+  connection of one kind: `CALDAV_*` applies only to a `kind: caldav`
+  section, `JMAP_*` only to a `kind: jmap` one, and the other kinds have
+  none.
+  - A URL in the environment means the file is not read at all, whatever
+    the section name expands to.  Both libraries do this today.
+  - Otherwise they apply key by key to the one section being read (the
+    one named, else `CALDAV_CONFIG_SECTION`, else `default`):
+    `CALDAV_PASSWORD` alone overrides that section's password and keeps
+    its URL.  A secret from the environment replaces the section's
+    `password_command` or `password_keyring`, which is then not run.
+    This is what calendaring-jmap does; caldav does not yet (see below).
+  - When a name expands to several sections (`contains`, `*`, globs),
+    environment variables without a URL are not applied.  That is a
+    change: caldav's `get_calendars` today lets any `CALDAV_*`
+    connection variable replace the whole expansion with one client.
 - The cost: caldav reads only `caldav_*` sections. For caldav (and plann)
   to use the new-style `work` section above, caldav's parser must learn
   `kind: caldav` with unprefixed keys. That is about ten lines in
@@ -116,7 +131,8 @@ everything:
 
 ### Compatibility with caldav
 
-Checked against caldav `master` (`e7b5b1d8`) on 2026-10-11:
+Checked against caldav `master` (`e7b5b1d8`) on 2026-10-11, and again
+(`0f2ee414`, no changes to the config parsing since) on 2026-10-15:
 
 - **caldav ignores sections it cannot use, with one exception.**
   `extract_conn_params_from_section` returns `None` for a section with
@@ -136,6 +152,13 @@ Checked against caldav `master` (`e7b5b1d8`) on 2026-10-11:
 
   Under parser option B below both land in caldav's parser; under
   parser option C they come with the shared package.
+- **caldav lets any `CALDAV_*` connection variable replace the file.**
+  `get_connection_params` returns the environment's keys as soon as there
+  is one, without merging (and `get_calendars` does the same for a
+  multi-section name), so a user who sets only `CALDAV_PASSWORD` to
+  keep the password out of the file gets `{'password': …}` and no URL.
+  That is a caldav bug either way, and fixing it gives the key-by-key
+  rule above.
 - **caldav parses YAML with `yaml.Loader`**, which builds arbitrary Python
   objects from tags (`caldav/config.py`, line 108). A file shared by
   several tools, and searched in `/etc/`, should be read with
@@ -212,4 +235,4 @@ one flat section.
 *Drafted with AI assistance (Claude Opus 5.5 via Claude Code) from the
 source of `caldav` (`caldav/config.py`, `docs/source/configfile.rst`) and
 `calendaring-jmap` (`_config.py`) as checked out on 2026-10-09, rechecked on 2026-10-11 (caldav `e7b5b1d8`,
-calendaring-jmap `004c6b4`).*
+calendaring-jmap `004c6b4`) and on 2026-10-15 (caldav `0f2ee414`).*
