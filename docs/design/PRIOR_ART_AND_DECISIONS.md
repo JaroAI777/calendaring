@@ -65,7 +65,7 @@ and EteSync 1.0 and 2.0.
   with 10 000 issues.
 - UID rewriting. Once a UID is prefixed it no longer round-trips.
 
-The README's conclusion stands: icalcli is complementary, not competing. It is
+The earlier README's conclusion stands: icalcli is complementary, not competing. It is
 also a possible *consumer*: its backend protocol is small enough that an adapter
 from this library to it would be about fifty lines, and that would give icalcli
 CalDAV support for free.
@@ -394,7 +394,7 @@ and the dependency picture makes it non-trivial.* This is not legal advice.
 | Package | Licence | Relationship |
 |---|---|---|
 | `caldav` | GPL-3.0-or-later **OR** Apache-2.0 | hard dependency (2.1) |
-| `icalendar-searcher` | **AGPL-3.0-or-later** | hard dependency (1.1), and a hard dependency of `caldav` |
+| `icalendar-searcher` | **AGPL-3.0-or-later** until 1.0.8; GPL-3.0-or-later **OR** Apache-2.0 from 1.1.0 | hard dependency (1.1), and a hard dependency of `caldav` |
 | `calendaring-jmap` | **AGPL-3.0-or-later** | dependency of 2.4 |
 | `icalendar` | BSD-2-Clause | hard dependency |
 | `recurring-ical-events` | LGPL-3.0-or-later | via `caldav`, `icalendar-searcher` |
@@ -421,8 +421,8 @@ except for the optional JMAP extra.
   if `icalendar-searcher` is relicensed or made optional.
 
 **Decision (author, 2026-10-05): GPL-3.0-or-later OR Apache-2.0**, like
-`caldav`. The author is relicensing `icalendar-searcher` to match (a pull
-request is open there), which also makes `caldav`'s Apache option real.
+`caldav`. The author relicensed `icalendar-searcher` to match (done in its
+1.1.0), which also makes `caldav`'s Apache option real.
 
 Consequences:
 - `calendaring-jmap` stays AGPL, so it must be an **optional dependency**, an

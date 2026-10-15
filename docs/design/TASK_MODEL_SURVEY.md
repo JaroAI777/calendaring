@@ -561,7 +561,7 @@ Source: [OpenProject API v3 — work packages](https://www.openproject.org/docs/
   HAL+JSON collection.
 - **Auth, pagination, rate limiting.** API key or OAuth2; `offset`/`pageSize`.
 
-**Assessment:** The README records a first impression that OpenProject "looks a
+**Assessment:** An earlier README recorded a first impression that OpenProject "looks a
 bit like some commercial solutions backed by heavy marketing investments slightly
 abusing the 'open' keyword". On the data model, that impression is not borne out:
 it has the most complete time model of any system surveyed (estimate, remaining,
@@ -650,7 +650,7 @@ Source: [`mattermost/focalboard`](https://github.com/mattermost/focalboard).
 you're interested in becoming a maintainer please let us know."** Standalone
 Focalboard has been separated from the Mattermost plugin
 (`mattermost/mattermost-plugin-boards`), and the standalone product is the one
-the README's list refers to.
+the README's list referred to.
 
 Its model is a generic board: cards carry **user-defined properties** of chosen
 types (select, date, person, number, …), so there is no fixed task schema at all
