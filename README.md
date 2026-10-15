@@ -51,6 +51,7 @@ Today one may have to choose different libraries for fetching calendaring inform
 * There are lots of proprietary systems offering calendaring and/or task management, but without supporting standards very well.  I'm not keen on working with those systems, but I'd happily accept pull-request for supporting any of them.
 * TODO: Research on Gitea, Vikunja, Kanboard, EteSync, Taskwarrior, OpenProject, GitLab, Emacs org-mode, Request Tracker and Simple Markdown files.  Some of those are neither calendaring system nor task list managers, but still frequently used for storing tasks/issues.
   * OpenProject looks a bit like some commercial solutions backed by heavy marketing investments slightly abusing the "open" keyword, abusing the .org domain space, and possibly just wanting to make quick money out of the EU digital sovereignity awakening,  but I may be very wrong - more research is certainly needed.
+  * GitHub was not on the original list, being proprietary, but it is where this project and its siblings keep their own issues, so it will be the first tracker after Gitea.
   * Focalboard was dropped from this list: its repository states that it is not maintained, and a Focalboard board has no fixed task schema at all - status, priority, dates and estimates are whatever properties the board author happened to create - so there would be no stable convention for a backend to map onto.
 
 
