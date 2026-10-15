@@ -193,7 +193,7 @@ prototyping.
         business, not this roadmap's.
       The work here is to record the principle and its consequences, not to decide
       them.
-- [x] Review `icalcli`'s pluggable-backend design (already researched — see README)
+- [x] Review `icalcli`'s pluggable-backend design (already researched in an earlier README; see [PRIOR_ART_AND_DECISIONS §1.1](PRIOR_ART_AND_DECISIONS.md#11-icalcli))
 - [x] Review how HomeAssistant currently handles calendar integrations, and whether
       this library is useful to them (README names them as a target user)
 - [x] Standards review: RFC 5545 (iCalendar), RFC 5546 (iTIP), RFC 7265 (jCal),
