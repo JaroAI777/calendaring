@@ -847,6 +847,27 @@ dependency, iCalendar-with-9253 covers everything the trackers express, and
 mapping into calendaring is lossless. Duplicate, copy and plain-reference
 relations are the exception and need `LINK` or an `X-` value.
 
+**Recurrence combined with relations.** Six of the eleven systems have both
+(table [3.1](#31-the-headline-table)), but most treat them independently.
+Vikunja's `repeat_after` and Kanboard's recurrence act on one task, not on its
+subtasks or relations **[unverified]**. Taskwarrior's `depends` points at one
+concrete instance and is not regenerated for the next one **[unverified]**.
+org-mode does not reset the children of a repeating entry: checkbox lists can be
+reset with `RESET_CHECK_BOXES` (org-checklist), but child headings need a custom
+function on [`org-todo-repeat-hook`](https://orgmode.org/manual/Repeated-tasks.html)
+(Org 9.2+). Outside the survey, two systems repeat a hierarchy deliberately.
+[OmniFocus](https://learnomnifocus.com/tutorial/omnifocus-2-mac-repeating-actions-groups-and-projects/)
+copies a repeating project or action group with all its nested actions when it
+is completed; the nested actions do not inherit the repeat.
+[Todoist](https://www.todoist.com/help/articles/reset-a-sub-task-in-todoist-V6SRBGPw0)
+re-adds the sub-tasks of a recurring parent, but only with the "Reset sub-tasks"
+setting on, one level deep and at most 30. iCalendar cannot point at a single
+occurrence either: `RELATED-TO` carries a UID, not a UID plus `RECURRENCE-ID`.
+So an `RRULE` on every node of a tree breaks the rule that a parent is due after
+its children as soon as a child is completed: the child advances to its next
+occurrence while the parent is still pending. A model for recurring trees is
+sketched in [4.4](#44-details-to-be-decided-later).
+
 **Change detection.** Three systems have proper optimistic-locking tokens — Gitea's
 `content_version`, OpenProject's `lockVersion` and EteSync's item revision — which
 behave like an ETag and let a client detect a lost update. Everything else offers only an `updated`
@@ -972,6 +993,8 @@ for time *recorded* rather than time *planned*.
 * How to tag a `VEVENT` as a work-log; can be done through `CATEGORIES:WORKLOG`, an `X-` property, or membership of a dedicated collection.
 
 * Should we carry the `remaining` duration, considering that only two of the nine systems with a task model of their own support it?
+
+* Recurring task trees (see [3.2](#32-dimension-by-dimension)). The candidate is the OmniFocus model: `RRULE` on the root only. Completing the root completes its pending children (plann's rule: a child is done before its parent), splits the completed occurrence off as a copy with a new UID, as python-caldav's "safe" completion does, and rewrites the completed children's `RELATED-TO` to point at that copy. The subtree is then regenerated for the next occurrence: each descendant is copied with a new UID, its `DTSTART`/`DUE` shifted by the same delta as the root, and linked to the copy of its own parent, so deeper trees keep their shape. Open: how a recurring tree is represented on a backend that has no recurrence.
 
 * How to transport the native-status passthrough (e.g. a plain string or a typed object - RT and OpenProject can also report the legal transitions).
 
