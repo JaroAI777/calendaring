@@ -596,7 +596,7 @@ What each would require of roadmap item [1.3](ROADMAP.md#13-syncasync-scaffoldin
      (`test_generated_sync_code_is_fresh`);
    - the shared conformance suite in both modes, under `-W error`;
    - a check that `_async/` uses no `asyncio`, no third-party `Async*` names and
-     no `await(...)` ([§9](#9-result-pagination-and-the-filesystem-backend); not yet written).
+     no `await(...)` ([§9](#9-result-pagination-and-the-filesystem-backend); written in 1.3, in `tests/test_generated_sync.py`).
 
 For both, dev-only tools must fail the build when missing in CI, not skip.
 
@@ -734,7 +734,7 @@ did not write the enforcement.
 7. **`unasync` itself (p4).** It is a token rewrite that imports `setuptools`;
    httpcore uses a short script of its own instead. 1.3 would decide between
    depending on it and vendoring an equivalent — either works with the
-   committed-output arrangement.
+   committed-output arrangement.  (Settled in [1.3](ROADMAP.md#13-syncasync-scaffolding): depend on it, pinned exactly.)
 
 ---
 

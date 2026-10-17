@@ -40,9 +40,52 @@ Edit `_async/` only, then run
 python tools/generate_sync.py
 ```
 
-`tests/test_generated_sync.py` fails if a `_sync/` copy is stale.  Code with
-no token-for-token sync equivalent (`asyncio` in particular) goes in
-`src/calendaring/_concurrency.py`, once per mode.
+The generator renames `AsyncX` to `SyncX`, drops `async` and `await`, and
+applies the replacement map in `tools/generate_sync.py`.  Every file in
+`_async/` starts with a one-line comment, which becomes the do-not-edit
+header in its copy.  `tests/test_generated_sync.py` fails if a `_sync/`
+copy is stale, and it also rejects what a token rewrite cannot translate:
+
+- `asyncio`, threads, sleeps and anything else with no token-for-token sync
+  equivalent go in `src/calendaring/_concurrency.py`, written once per mode,
+  with an entry in the replacement map (`agather` -> `gather`);
+- a third-party `Async*` name, such as `httpx.AsyncClient`, would become a
+  `SyncClient` that does not exist: wrap it in the per-mode layer too;
+- the token right after `await` is dropped, meant to be the space:
+  write `await x`, never `await(x)`;
+- a name the generator renames must not sit inside an f-string, since
+  whether it gets renamed there depends on the Python version.
+
+A forgotten `await` in `_async/` is a correct call once the generator has
+removed it, so the sync tests cannot catch it.  mypy (strict) and ruff
+(F841) can, and `tests/test_enforcement.py` checks that they still do, on
+the planted mistakes in `tests/specimens/`.  So keep the code fully
+annotated, and do not silence an `unused-coroutine` error.
+
+### Adding a backend
+
+1. Write it in `src/calendaring/_async/<name>.py` as `Async<Name>Backend`
+   and `Async<Name>Collection`, subclassing `AsyncBackend` and
+   `AsyncCollection`.  Set `kind = "<name>"` on the backend class, so
+   `Backend.connect(kind="<name>")` finds it.  The backend implements
+   `_connect` and `collections`; the collection implements the primitives
+   (`_query`, `_fetch`, `_create`, `_update`, `_delete`).  Capability
+   checks, loss policies, client-side filtering and the rest are written
+   once in the base classes.  `_async/memory.py`, the reference backend,
+   is the smallest complete example.
+2. Declare its capabilities honestly, in the `capabilities` each
+   constructor takes.  The conformance suite asserts that an operation
+   declared unsupported fails as specified.
+3. Add both class names to `REPLACEMENTS` in `tools/generate_sync.py`, so
+   the sync classes are unprefixed (`<Name>Backend`, not
+   `Sync<Name>Backend`).  A test fails if you forget.
+4. Run the generator, and import both modes from a public module (as
+   `calendaring/memory.py` does).  Import that module in
+   `calendaring/__init__.py`: a backend registers its `kind` when it is
+   imported, so until then `connect()` cannot find it.
+5. Add `tests/_async/test_<name>_conformance.py`, with a class that
+   subclasses `calendaring.testing.AsyncConformance` and returns the
+   backend from `open_backend()`.  The generator writes the sync tests.
 
 ## Commit messages
 
