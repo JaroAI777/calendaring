@@ -858,11 +858,12 @@ function on [`org-todo-repeat-hook`](https://orgmode.org/manual/Repeated-tasks.h
 (Org 9.2+). Outside the survey, two systems repeat a hierarchy deliberately.
 [OmniFocus](https://learnomnifocus.com/tutorial/omnifocus-2-mac-repeating-actions-groups-and-projects/)
 copies a repeating project or action group with all its nested actions when it
-is completed; the nested actions do not inherit the repeat.
+is completed; the nested actions do not inherit the repeat **[unverified]**.
 [Todoist](https://www.todoist.com/help/articles/reset-a-sub-task-in-todoist-V6SRBGPw0)
 re-adds the sub-tasks of a recurring parent, but only with the "Reset sub-tasks"
-setting on, one level deep and at most 30. iCalendar cannot point at a single
-occurrence either: `RELATED-TO` carries a UID, not a UID plus `RECURRENCE-ID`.
+setting on, one level deep and at most 30 **[unverified]**.
+iCalendar cannot point at a single occurrence either: `RELATED-TO` carries a
+UID, not a UID plus `RECURRENCE-ID`.
 So an `RRULE` on every node of a tree breaks the rule that a parent is due after
 its children as soon as a child is completed: the child advances to its next
 occurrence while the parent is still pending. A model for recurring trees is
