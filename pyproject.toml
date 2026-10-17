@@ -29,11 +29,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# ruff and mypy are pinned exactly; keep ruff in step with .pre-commit-config.yaml
+# ruff and mypy are pinned exactly; keep ruff in step with .pre-commit-config.yaml.
+# So is unasync: its output is committed, and the freshness test compares bytes.
 dev = [
   "pytest>=8.0",
   "pytest-asyncio>=1.0",
-  "unasync>=0.6",
+  "unasync==0.6.0",
   "ruff==0.17.0",
   "mypy==2.4.0",
   "pre-commit>=4.0",
@@ -64,8 +65,9 @@ exclude = ["/prototypes", "/.github", "/.claude", "tmp-*", "*~", "*.bak"]
 line-length = 120
 target-version = "py311"
 # The 0.2 prototypes are frozen research code with their own conventions, and
-# the design documents align their code comments by hand.
-extend-exclude = ["prototypes", "docs/design"]
+# the design documents align their code comments by hand.  The specimens
+# hold planted mistakes; tests/test_enforcement.py checks them on purpose.
+extend-exclude = ["prototypes", "docs/design", "tests/specimens"]
 # Also for files named on the command line, as pre-commit does: reformatting
 # a generated _sync/ file would make the freshness test fail.
 force-exclude = true
@@ -92,11 +94,18 @@ strict = true
 # Check as the oldest supported Python, like ruff's target-version
 python_version = "3.11"
 files = ["src", "tests"]
+# Planted mistakes, type-checked on purpose by tests/test_enforcement.py
+exclude = ["^tests/specimens/"]
 
 [[tool.mypy.overrides]]
 # Partly annotated, but neither ships py.typed yet, so mypy would skip them.
 module = ["icalendar_searcher.*", "recurring_ical_events.*"]
 follow_untyped_imports = true
+
+[[tool.mypy.overrides]]
+# The sync code generator (roadmap 1.3); untyped, and a dev dependency only.
+module = ["unasync"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
