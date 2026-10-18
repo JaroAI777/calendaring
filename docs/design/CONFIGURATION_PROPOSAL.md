@@ -3,8 +3,9 @@
 **Status:** proposal for the pycal team, drafted by Claude Opus 5.5 on
 2026-10-09. The format (F2 below) was chosen on 2026-10-14 by the author
 and Sashank, in [PR 6](https://github.com/pycalendar/calendaring/pull/6).
-Where the parser lives is not decided: option B is proposed, and has
-Sashank's support.
+The parser lives in a package of its own, option C, decided on 2026-10-18:
+[calendaring-config](https://github.com/pycalendar/calendaring-config),
+whose `docs/format.md` is now the specification of the format.
 
 **Feeds:** [roadmap 1.4](ROADMAP.md#14-configuration-and-credentials) and
 [API spec §10, Q8](API_DESIGN.md#10-open-questions)
@@ -198,18 +199,13 @@ handling.
 [D1](PRIOR_ART_AND_DECISIONS.md#d1-packaging-principle) is the principle
 that logic which isn't CalDAV logic doesn't belong in `caldav`.
 
-**Proposal: B now, and C only if the team wants calendaring-jmap to read
-the shared file without calendaring.** B costs nothing today:
-`calendaring` already depends on `caldav`, and caldav's parser is public
-(`expand_config_section`, `config_section`, `read_config`,
-`expand_env_vars`). What makes a later move to C cheap is that **the format
-is documented once, as a specification**, not defined by whichever parser
-reads it. If the code later moves from caldav into a package, no user's
-file changes.
-
-Option B leaves calendaring-jmap close to reading the shared file on its
-own: its flat loader already reads one section, so pointing it at a named
-section is all it needs for files without `inherits` or meta-sections.
+**Decided: C**, as [calendaring-config](https://github.com/pycalendar/calendaring-config).
+B was proposed first, but `calendaring` does not depend on `caldav`,
+and every change to the parser would have waited for a caldav release.
+A package of its own is released at calendaring's pace, and caldav
+moves to it when it is ready.  The format is documented once, as a
+specification (calendaring-config's `docs/format.md`), not defined by
+whichever parser reads it, so no user's file changes when caldav switches.
 
 The number of packages matters. Every new one is another release, CI
 setup and version matrix for the same few people. C is worth that only if
@@ -221,14 +217,18 @@ one flat section.
 1. Should `calendaring-jmap` on its own read the shared file, with
    meta-sections and inheritance? If yes, go with parser option C; if no, B.
    Sashank: no, so B; calendaring passes the section to calendaring-jmap,
-   which keeps its simple file for standalone use.
+   which keeps its simple file for standalone use.  C was chosen anyway,
+   for release reasons (see above), so calendaring-jmap can read the
+   full file through calendaring-config if it ever wants to.
 2. The file name. caldav's `~/.config/caldav/calendar.conf` is an odd home
    for JMAP and GitHub sections. **Proposal:** `~/.config/pycal/calendar.yaml`
    as the first place searched, with caldav's current paths still read as
    fallbacks, so that nobody has to move a file. caldav does not search
    `~/.config/pycal/` today, so this is one of the caldav changes above.
+   calendaring-config searches it first, as proposed, until the team
+   decides otherwise.
 3. Are `_password_command` and `_password_keyring` the right two
-   mechanisms, or is one of them enough?
+   mechanisms, or is one of them enough?  calendaring-config has both.
 
 ---
 

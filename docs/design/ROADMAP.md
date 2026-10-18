@@ -384,17 +384,26 @@ is deliberately the command-line half only.  See
 therefore has a committed downstream consumer and should not be trimmed.
 
 **Tasks:**
-- [ ] Config file format and schema, supporting multiple accounts and backends
-- [ ] Config file discovery (XDG paths, explicit path, environment)
-- [ ] Credential handling: keyring integration, and never requiring secrets in
+- [x] Config file format and schema, supporting multiple accounts and backends
+- [x] Config file discovery (XDG paths, explicit path, environment)
+- [x] Credential handling: keyring integration, and never requiring secrets in
       plaintext config
 - [ ] Settle the shared file with the caldav and calendaring-jmap
-      maintainers: see [CONFIGURATION_PROPOSAL.md](CONFIGURATION_PROPOSAL.md)
-- [ ] Check existing conventions first — `caldav`, `plann`, `vdirsyncer`, `khal`, etc — rather
+      maintainers: see [CONFIGURATION_PROPOSAL.md](CONFIGURATION_PROPOSAL.md).
+      The parser is now a package of its own,
+      [calendaring-config](https://github.com/pycalendar/calendaring-config);
+      caldav has yet to adopt it
+      ([caldav issue #786](https://github.com/python-caldav/caldav/issues/786)),
+      and the file name is still open.
+- [x] Check existing conventions first — `caldav`, `plann`, `vdirsyncer`, `khal`, etc — rather
       than inventing a fifth format (probably build on the caldav format)
-- [ ] Leave room for backends beyond the funded ones without format changes:
-      GitHub first, then any plugin backend
-- [ ] Document the format
+- [x] Leave room for backends beyond the funded ones without format changes:
+      GitHub first, then any plugin backend.  A section's `kind` names any
+      registered backend; a GitHub section still needs `url` until
+      `connect()` makes it optional, a gap the
+      [configuration proposal](CONFIGURATION_PROPOSAL.md#the-format-f2-a-kind-key-with-the-keys-backendconnect-takes)
+      notes.
+- [x] Document the format: calendaring-config's `docs/format.md`
 
 ---
 
