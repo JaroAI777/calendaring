@@ -312,25 +312,63 @@ Notes from doing it:
 **Tasks:**
 - [x] Before implementing: a clean-context review of 0.2's `unasync` prototype
       (p4) and the claims made for it
-- [ ] Implement 0.2's decision (p4) as reusable scaffolding: async-first
+- [x] Implement 0.2's decision (p4) as reusable scaffolding: async-first
       source in `_async/`, a recursive generator that writes `_sync/` and
       deletes orphans, and a freshness test that compares file sets as well
       as contents; per-mode code in a hand-written layer underneath
-- [ ] Decide between depending on `unasync` and vendoring an equivalent
-- [ ] Maintain the generator's replacement map for names that must not follow
+- [x] Decide between depending on `unasync` and vendoring an equivalent
+- [x] Maintain the generator's replacement map for names that must not follow
       the `Async*` → `Sync*` rename, such as unprefixed public sync classes
-- [ ] Gate CI on pyright, or mypy with `check_untyped_defs`, over both copies,
+- [x] Gate CI on pyright, or mypy with `check_untyped_defs`, over both copies,
       plus ruff F841, with a test that the checker flags a committed specimen;
       run the conformance suite under `-W error`
-- [ ] Check that `_async/` contains nothing a token rewrite breaks (`asyncio`,
+- [x] Check that `_async/` contains nothing a token rewrite breaks (`asyncio`,
       third-party `Async*` names, `await(...)`)
-- [ ] Make dev-only tools fail the build when missing in CI rather than skip
-- [ ] Ensure the public type signatures are correct under mypy in **both** modes —
+- [x] Make dev-only tools fail the build when missing in CI rather than skip
+- [x] Ensure the public type signatures are correct under mypy in **both** modes —
       the caldav failure was annotations that lie — and gate CI on a test that
       the checker catches a missing and a spurious `await` (0.2's three cases)
-- [ ] Document the pattern for contributors adding a backend
+- [x] Document the pattern for contributors adding a backend
 
 Enforcement is not optional; it is the whole point of the item.
+
+Notes from doing it:
+
+- The generator, its freshness test and the per-mode layer
+  (`_concurrency.py`) came with 1.2.  This item added the enforcement
+  around them: `tests/test_enforcement.py` runs mypy and ruff, with the
+  project's own configuration, over the planted mistakes in
+  `tests/specimens/` and asserts that exactly the marked lines are
+  flagged, in both modes.  The correct calls in the same files are 0.2's
+  case 1, for the main entry points (`connect`, `collection`, `save`,
+  `complete`, `tasks`, `iter_search`, `search`).  The shapes the checkers miss, such as a missing `await` in a
+  comprehension, are planted unmarked, so a checker that starts or stops
+  catching one fails the test.  The plain `mypy` and `ruff check .` runs
+  exclude the specimens.
+- mypy `strict` implies `check_untyped_defs`.  The specimen's unannotated
+  method is the test that it is in effect.  pyright is not run: mypy
+  already flags every shape pyright does in 0.2's table.
+- `-W error` was already in `filterwarnings`.  A test now runs pytest with
+  the project's configuration on an async test that drops a coroutine,
+  and asserts that the test fails.
+- **unasync stays a dependency, pinned exactly**, rather than vendored.
+  Against it: four years between 0.5 and 0.6, `import setuptools` at
+  import time, and output that depends on the Python version for
+  f-strings (1.2's note).  Vendoring would remove the setuptools import
+  and nothing else, at the price of owning a token rewrite.  Each of its
+  quirks now has a test (f-strings, `aclose`, `await(...)`, third-party
+  `Async*` names), the output is committed, so users never install it,
+  and the pin makes every contributor generate the same bytes.  Revisit
+  if a new Python breaks it.  The CI matrix runs the freshness test on
+  every supported version.
+- The replacement map is checked from both ends.  A generated class may
+  keep the `Sync` prefix only if it is a bound item or `SyncConformance`,
+  and an entry no `_async/` source uses any more fails the build.
+- A missing dev tool fails the tests that need it rather than skipping
+  them.  `test_generated_sync.py` imports unasync, and
+  `test_enforcement.py` refuses a missing mypy or ruff.
+- CONTRIBUTING.md documents the rules for `_async/` and the steps for
+  adding a backend.
 
 ---
 
