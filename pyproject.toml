@@ -23,6 +23,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
+  "calendaring-config>=0.1",
   "icalendar>=7.3",
   "icalendar-searcher>=1.1",
   "recurring-ical-events>=3.8",

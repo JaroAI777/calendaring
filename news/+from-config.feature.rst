@@ -1,0 +1,1 @@
+``Workspace.from_config()`` reads the configuration file shared with caldav and calendaring-jmap, and makes one backend per section.  The format, its discovery and the credential lookup (a command, or the system keyring) come from the new calendaring-config package.  In async mode it is a coroutine: ``await AsyncWorkspace.from_config()``.

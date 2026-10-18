@@ -230,7 +230,7 @@ the unprefixed name for the I/O classes. Types not defined here are in [§3 Item
 ```python
 class AsyncWorkspace:
     @classmethod
-    def from_config(cls, path: str | Path | None = None, *, section: str | None = None) -> Self: ...
+    async def from_config(cls, path: str | Path | None = None, *, section: str | None = None) -> Self: ...
     def __init__(self, backends: Iterable[AsyncBackend] = ()) -> None: ...
 
     backends: Sequence[AsyncBackend]
@@ -243,8 +243,13 @@ class AsyncWorkspace:
     async def close(self) -> None: ...
 ```
 
-`from_config` is specified by [roadmap 1.4](ROADMAP.md#14-configuration-and-credentials); this document only fixes that it exists and returns
-a workspace.
+`from_config` reads the shared configuration file through
+[calendaring-config](https://github.com/pycalendar/calendaring-config),
+whose `docs/format.md` specifies it ([roadmap 1.4](ROADMAP.md#14-configuration-and-credentials)).
+It makes one backend per section the name stands for, with the section's
+name as the backend's id.  It is a coroutine in async mode, since
+connecting may need the network; any problem with the file is a
+`ConfigurationError`.
 
 **Fan-out returns partial results.** `Workspace.collections` asks every
 backend, and `Workspace.search` every collection, and both return a
@@ -289,6 +294,13 @@ class AsyncBackend:
 - Credentials are never required in the URL or in plain-text configuration
   ([roadmap 1.4](ROADMAP.md#14-configuration-and-credentials)'s keyring work); `connect`'s keyword arguments are for programmatic
   use.
+- Open: which configuration keys a backend ignores.  The shared file keeps
+  keys such as `features`, `calendar_name`, `priority` and
+  `testing_allowed`, and `Workspace.from_config()` passes every key to
+  `connect()`; today a key the backend does not take is a
+  `ConfigurationError` naming the section.  Decided with the CalDAV
+  backend ([roadmap 2.1](ROADMAP.md#21-caldav-backend)), the first one
+  whose sections carry such keys.
 
 ### 2.3 Collection
 

@@ -9,14 +9,17 @@ the calls concurrently; sync mode runs them in turn (``_concurrency.py``).
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from contextlib import suppress
 from functools import partial
 from pathlib import Path
 from typing import Any, Self
+from urllib.parse import urlsplit, urlunsplit
 
+import calendaring_config
 from icalendar_searcher import Searcher
 
 from .._concurrency import agather
-from ..errors import AmbiguousError, CalendaringError, NotFoundError
+from ..errors import AmbiguousError, CalendaringError, ConfigurationError, NotFoundError
 from ..loss import LossPolicy
 from ..types import MultiResult
 from .backend import AsyncBackend
@@ -26,14 +29,67 @@ from .items import AsyncItem
 __all__ = ["AsyncWorkspace"]
 
 
+def _without_credentials(url: str) -> str:
+    """``url`` with any ``user:password@`` taken out, for error messages."""
+    parts = urlsplit(url)
+    if "@" not in parts.netloc:
+        return url
+    return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
+
+
+def _section_params(conn: calendaring_config.Connection) -> tuple[str, str, dict[str, Any]]:
+    """The section name, its url and the rest of ``connect()``'s keywords, the id included."""
+    params = dict(conn.params)
+    url = params.pop("url", None)
+    if not isinstance(url, str) or not url:
+        raise ConfigurationError(f"section {conn.name}: url must be a non-empty string")
+    default_id = f"environment-{conn.kind}" if conn.name == "environment" else conn.name
+    params.setdefault("id", default_id)
+    return conn.name, url, params
+
+
 class AsyncWorkspace:
     backends: Sequence[AsyncBackend]
     loss: LossPolicy | None
     verify: bool | None
 
     @classmethod
-    def from_config(cls, path: str | Path | None = None, *, section: str | None = None) -> Self:
-        raise NotImplementedError("the configuration file is roadmap 1.4")
+    async def from_config(cls, path: str | Path | None = None, *, section: str | None = None) -> Self:
+        """One backend per section ``section`` stands for, each with the section's name as its id.
+
+        The file, its discovery and its secrets are calendaring-config's
+        (its ``docs/format.md``); every problem with them, or with connecting
+        a section, is a ``ConfigurationError`` naming the section.  Connections
+        from the environment get the id ``environment-<kind>``.
+        """
+        try:
+            connections = calendaring_config.load(path, section)
+            if not connections:
+                file = calendaring_config.find_config_file(path)
+        except calendaring_config.ConfigError as e:
+            raise ConfigurationError(str(e)) from e
+        if not connections:
+            if file is None:
+                raise ConfigurationError("no configuration file found, and no URL in the environment")
+            raise ConfigurationError(f"{file} has no default section, or the one named has no enabled section")
+        sections = [_section_params(conn) for conn in connections]
+        ids = [params["id"] for _, _, params in sections]
+        if duplicate := next((i for i in ids if ids.count(i) > 1), None):
+            raise ConfigurationError(f"two sections give the backend id {duplicate}")
+        backends: list[AsyncBackend] = []
+        try:
+            for (name, url, params), conn in zip(sections, connections, strict=True):
+                try:
+                    backends.append(await AsyncBackend.connect(url, kind=conn.kind, **params))
+                except Exception as e:
+                    message = str(e).replace(url, _without_credentials(url))
+                    raise ConfigurationError(f"section {name}: {message}") from None
+        except BaseException:
+            for backend in backends:
+                with suppress(Exception):
+                    await backend.close()
+            raise
+        return cls(backends)
 
     def __init__(
         self, backends: Iterable[AsyncBackend] = (), *, loss: LossPolicy | None = None, verify: bool | None = None

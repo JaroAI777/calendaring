@@ -20,6 +20,7 @@ def correct(workspace: Workspace, task: Task) -> str:
     for item in coll.iter_search():
         item.reload()
     everywhere = workspace.search(summary="x")
+    assert Workspace.from_config(section="x").backends
     return done.uid + found[0].uid + str(len(everywhere.items))
 
 
@@ -34,3 +35,4 @@ async def bound_spurious(task: SyncTask) -> None:
 async def more_spurious(workspace: Workspace) -> None:
     await Backend.connect("memory:")  # expect: misc
     await workspace.search()  # expect: misc
+    await Workspace.from_config()  # expect: misc

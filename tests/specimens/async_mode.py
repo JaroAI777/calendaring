@@ -26,6 +26,8 @@ async def correct(backend: AsyncBackend, workspace: AsyncWorkspace, task: Task) 
     async for item in coll.iter_search():
         await item.reload()
     everywhere = await workspace.search(summary="x")
+    configured = await AsyncWorkspace.from_config(section="x")
+    assert configured.backends
     return done.uid + found[0].uid + str(len(everywhere.items))
 
 
@@ -48,6 +50,7 @@ async def more_results_used(backend: AsyncBackend, workspace: AsyncWorkspace) ->
     for _ in coll.iter_search():  # expect: attr-defined
         pass
     assert workspace.search().items  # expect: attr-defined
+    assert AsyncWorkspace.from_config().backends  # expect: attr-defined
 
 
 class Helper:
