@@ -9,22 +9,20 @@ the rest: ``_awaited`` becomes ``_returned`` and ``AsyncDAVClient`` becomes
 ``DAVClient``.  Each wrapper resolves the union once, and fails loudly if the
 client is of the wrong mode.  What both modes share lives here.
 
-Writes go through the client's ``put()`` / ``delete()`` with the
-preconditions this library needs (``If-None-Match: *`` to create,
-``If-Match`` to update or delete), since ``CalendarObjectResource.save()``
-sends no ``If-None-Match`` and bumps ``SEQUENCE``.  Those return the status
-instead of raising, and ``_status()`` maps it.
+Writes go through caldav's own ``save()`` and ``delete()``: ``save(no_overwrite=True)``
+sends ``If-None-Match: *`` where the server honours it (caldav 3.6), and an
+update carries the ETag it was read with.  ``SEQUENCE`` is left as given.
 """
 
 from __future__ import annotations
 
 import inspect
-from collections.abc import Coroutine, Iterator, Mapping
+from collections.abc import Coroutine, Iterator
 from contextlib import contextmanager
 from typing import Any, TypeVar, cast
 
 from caldav.aio import AsyncDAVClient
-from caldav.calendarobjectresource import CalendarObjectResource
+from caldav.calendarobjectresource import CalendarObjectResource, Event, Journal, Todo
 from caldav.collection import Calendar
 from caldav.davclient import DAVClient
 from caldav.elements.dav import DisplayName, GetEtag
@@ -53,13 +51,13 @@ __all__ = [
     "DAVClient",
     "DisplayName",
     "SyncResult",
-    "WriteResult",
+    "creating",
+    "missing_if",
     "translated",
 ]
 
 T = TypeVar("T")
 
-CONTENT_TYPE = {"Content-Type": "text/calendar; charset=utf-8"}
 
 # A Depth: 1 PROPFIND for the ETag of every object in a calendar (RFC 4791 §8.2.1.1 lists hrefs this way).
 ETAG_PROPFIND = (
@@ -71,8 +69,6 @@ VALID_SYNC_TOKEN = "{DAV:}valid-sync-token"  # RFC 6578 §3.2
 # A sync-collection report: hrefs changed, hrefs removed, the new token (None if the server gave
 # none), and whether it is incomplete (truncated beyond what caldav itself follows, RFC 6578 §3.6).
 SyncResult = tuple[list[str], list[str], str | None, bool]
-
-WriteResult = tuple[int, str | None]  # HTTP status, and the ETag the server returned, if any
 
 
 async def _awaited(value: T | Coroutine[Any, Any, T]) -> T:
@@ -113,42 +109,53 @@ def _translate(exc: dav_error.DAVError) -> CalendaringError:
         status = getattr(exc, "status", None) or getattr(getattr(exc, "response", None), "status", None)
         return (AuthenticationError if status == 401 else AuthorizationError)(message)
     if isinstance(exc, dav_error.RateLimitError):
-        return RateLimitError(message, retry_after=getattr(exc, "retry_after", None))
+        return RateLimitError(message, retry_after=getattr(exc, "retry_after_seconds", None))
     return BackendError(message)
 
 
-def _status(status: int, what: str, *, creating: bool = False, body: bytes | str = b"") -> None:
-    """Raise for a write's status; 2xx passes."""
-    if 200 <= status < 300:
-        return
-    if creating and status == 412:
-        raise AlreadyExistsError(f"{what}: the name is taken (412)", taken="native_id")
-    if creating and status in (403, 409) and "no-uid-conflict" in (body if isinstance(body, str) else body.decode()):
-        raise AlreadyExistsError(f"{what}: another object holds the UID (RFC 4791 §5.3.2.1)", taken="uid")
-    if status == 412:
-        raise ConflictError(f"{what}: changed since it was read (412)")
-    if status == 404:
-        raise NotFoundError(f"{what}: not found (404)")
-    if status == 401:
-        raise AuthenticationError(f"{what}: 401")
-    if status == 403:
-        raise AuthorizationError(f"{what}: 403")
-    if status == 429:
-        raise RateLimitError(f"{what}: 429")
-    raise BackendError(f"{what}: HTTP {status}")
+# The caldav class for each component a calendar object holds.
+RESOURCE: dict[str, type[CalendarObjectResource]] = {"VEVENT": Event, "VTODO": Todo, "VJOURNAL": Journal}
 
 
-def _write_headers(*, create: bool, etag: str | None) -> dict[str, str]:
-    headers = dict(CONTENT_TYPE)
-    if create:
-        headers["If-None-Match"] = "*"
-    elif etag is not None:
-        headers["If-Match"] = etag
-    return headers
+def _resource(
+    client: Any,
+    calendar: Calendar,
+    url: str,
+    data: bytes | None = None,
+    kind: str | None = None,
+    etag: str | None = None,
+) -> CalendarObjectResource:
+    """A caldav object for ``url``, holding ``data`` and the ETag it was read with, ready to save or delete."""
+    props = {} if etag is None else {GetEtag.tag: etag}
+    cls = RESOURCE.get(kind or "", CalendarObjectResource)
+    return cls(client=client, url=url, data=None if data is None else data.decode(), parent=calendar, props=props)
 
 
-def _body(response: Any) -> bytes | str:
-    return getattr(response, "_raw", b"") or b""  # DAVResponse keeps the body only privately
+def _strong(etag: str | None) -> str | None:
+    """The ETag a write left cached, if it is strong (RFC 4791 §5.3.4: a changed object gets none)."""
+    return None if etag is None or etag.startswith("W/") else etag
+
+
+@contextmanager
+def creating() -> Iterator[None]:
+    """caldav's refusals of a create-only save, as ``AlreadyExistsError``."""
+    try:
+        yield
+    except dav_error.UidConflictError as exc:  # another object holds the UID (RFC 4791 §5.3.2.1)
+        raise AlreadyExistsError(str(exc), taken="uid") from exc
+    except dav_error.ConsistencyError as exc:  # If-None-Match failed, or caldav's search found it
+        raise AlreadyExistsError(str(exc), taken="native_id") from exc
+
+
+@contextmanager
+def missing_if(any_version: bool) -> Iterator[None]:
+    """With ``If-Match: *``, a failed precondition means there was nothing there (RFC 9110 §13.1.1)."""
+    try:
+        yield
+    except dav_error.ETagMismatchError as exc:
+        if not any_version:
+            raise
+        raise NotFoundError(str(exc)) from exc
 
 
 def _etags(response: Any, url: str) -> dict[str, str]:
@@ -166,11 +173,3 @@ def _sync_result(found: Any) -> SyncResult:
     changed = [str(o.url) for o in found.objects if str(o.url) not in deleted]
     token = None if found.sync_token is None else str(found.sync_token)
     return changed, sorted(deleted), token, bool(found.truncated)
-
-
-def _etag(headers: Mapping[str, str]) -> str | None:
-    """The ETag of a write's response, if the server sent a strong one (RFC 4791 §5.3.4)."""
-    for name, value in headers.items():
-        if name.lower() == "etag":
-            return None if value.startswith("W/") else value
-    return None

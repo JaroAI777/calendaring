@@ -13,14 +13,13 @@ from .._caldav_io import (
     CalendarObjectResource,
     DisplayName,
     SyncResult,
-    WriteResult,
     _awaited,
-    _body,
-    _etag,
     _etags,
-    _status,
+    _resource,
+    _strong,
     _sync_result,
-    _write_headers,
+    creating,
+    missing_if,
     translated,
 )
 from ..errors import ConfigurationError
@@ -92,13 +91,23 @@ class AsyncDAV:
             found = calendar.get_objects_by_sync_token(token, load_objects=False, disable_fallback=True)
             return _sync_result(await _awaited(found))
 
-    async def put(self, url: str, data: bytes, *, create: bool, etag: str | None) -> WriteResult:
-        with translated():
-            response = await self.client.put(url, data.decode(), _write_headers(create=create, etag=etag))
-        _status(response.status, f"PUT {url}", creating=create, body=_body(response))
-        return response.status, _etag(response.headers)
+    async def create(self, calendar: Calendar, url: str, data: bytes, kind: str) -> str | None:
+        """Store a new object at ``url``: ``AlreadyExistsError`` if the name or the UID is taken.  Its ETag, if strong."""
+        obj = _resource(self.client, calendar, url, data, kind)
+        with translated(), creating():
+            await _awaited(obj.save(no_overwrite=True, increase_seqno=False, only_this_recurrence=False))
+        return _strong(obj.etag)
 
-    async def delete(self, url: str, *, etag: str | None) -> None:
+    async def update(self, calendar: Calendar, url: str, data: bytes, kind: str, etag: str | None) -> str | None:
+        """Replace the object at ``url``, if it still has ``etag`` (any version without one).  Its new ETag, if strong."""
+        obj = _resource(self.client, calendar, url, data, kind, etag)
         with translated():
-            response = await self.client.delete(url, None if etag is None else {"If-Match": etag})
-        _status(response.status, f"DELETE {url}")
+            await _awaited(obj.save(increase_seqno=False, only_this_recurrence=False, precondition="etag"))
+        return _strong(obj.etag)
+
+    async def delete(self, calendar: Calendar, url: str, etag: str | None) -> None:
+        """Remove the object at ``url``: ``NotFoundError`` if it is gone.  With ``etag``, ``ConflictError`` if it changed."""
+        obj = _resource(self.client, calendar, url)
+        with translated(), missing_if(etag is None):
+            # caldav counts a 404 as success only without a precondition; If-Match: * keeps it an error.
+            await _awaited(obj.delete(if_match=etag if etag is not None else "*"))

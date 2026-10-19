@@ -24,7 +24,7 @@ from icalendar_searcher import Searcher
 from .._caldav_features import backend_capabilities, collection_capabilities
 from .._caldav_io import Calendar
 from ..capabilities import Feature
-from ..errors import AlreadyExistsError, ConfigurationError, NotFoundError, SyncTokenError
+from ..errors import AlreadyExistsError, ConfigurationError, ConflictError, NotFoundError, SyncTokenError
 from ..items import _items_of, _parse
 from ..loss import LossPolicy
 from ..types import Component, StoredObject, SyncToken
@@ -156,11 +156,12 @@ class CalDAVCollection(Collection):
         return self._stored(self._backend._dav.by_uid(self.calendar, uid))
 
     def _create(self, calendar: icalendar.Calendar, *, native_id: str | None, wire: bytes | None) -> StoredObject:
-        data = wire if wire is not None else calendar.to_ical()
-        uid = str(_items_of(calendar)[0].get("UID", ""))
+        data = calendar.to_ical()  # wire= is refused before this: write.wire is UNSUPPORTED
+        first = _items_of(calendar)[0]
+        uid = str(first.get("UID", ""))
         name = native_id or (f"{uid}.ics" if SAFE_NAME.match(uid) else f"{uuid.uuid4()}.ics")
         try:
-            _, etag = self._backend._dav.put(self._href(name), data, create=True, etag=None)
+            etag = self._backend._dav.create(self.calendar, self._href(name), data, str(first.name))
         except AlreadyExistsError as exc:
             if native_id is None:
                 exc.taken = "uid"  # the name was derived from the UID
@@ -169,17 +170,31 @@ class CalDAVCollection(Collection):
             return self._fetch(name)
         return StoredObject(name, etag, _parse(data))
 
+    def _unless_changed(self, native_id: str, etag: str | None) -> str | None:
+        """The ETag to send as ``If-Match``.  A weak one cannot match (RFC 9110 §13.1.1), and caldav
+        would send the write unconditionally, so it is compared with a fresh read instead: a
+        window between the read and the write, where a strong ETag has none."""
+        if etag is None or not etag.startswith("W/"):
+            return etag
+        if (self._fetch(native_id)).etag != etag:
+            raise ConflictError(f"{native_id!r} changed since it was read")
+        return None
+
     def _update(
         self, native_id: str, calendar: icalendar.Calendar, *, etag: str | None, wire: bytes | None
     ) -> StoredObject:
-        data = wire if wire is not None else calendar.to_ical()
-        _, new_etag = self._backend._dav.put(self._href(native_id), data, create=False, etag=etag)
+        etag = self._unless_changed(native_id, etag)
+        data = calendar.to_ical()
+        kind = str(_items_of(calendar)[0].name)
+        new_etag = self._backend._dav.update(self.calendar, self._href(native_id), data, kind, etag)
         if new_etag is None:
             return self._fetch(native_id)
         return StoredObject(native_id, new_etag, _parse(data))
 
     def _delete(self, native_id: str, *, etag: str | None) -> None:
-        self._backend._dav.delete(self._href(native_id), etag=etag)
+        self._backend._dav.delete(
+            self.calendar, self._href(native_id), self._unless_changed(native_id, etag)
+        )
 
     def _set_name(self, name: str) -> None:
         self._backend._dav.set_display_name(self.calendar, name)

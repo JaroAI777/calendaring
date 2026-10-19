@@ -30,9 +30,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-caldav = ["caldav>=3.5"]
+# 3.6: save(no_overwrite=True) sends If-None-Match: * (caldav branch feat/if-none-match-create).
+caldav = ["caldav>=3.6"]
 # Embedded CalDAV servers the caldav backend's conformance tests run against.
-test-servers = ["caldav>=3.5", "xandikos>=0.2", "radicale>=3.2"]
+test-servers = ["caldav>=3.6", "xandikos>=0.2", "radicale>=3.2"]
 # ruff and mypy are pinned exactly; keep ruff in step with .pre-commit-config.yaml.
 # So is unasync: its output is committed, and the freshness test compares bytes.
 dev = [

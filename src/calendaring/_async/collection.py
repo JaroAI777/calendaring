@@ -720,7 +720,7 @@ class AsyncCollection(ABC):
             return result
 
     async def delete(self, item: Item | str, *, overwrite: bool = False) -> None:
-        """Remove a stored item.  Given an item, unless it changed since it was read."""
+        """Remove a stored item: ``NotFoundError`` if it is gone.  Given an item, unless it changed since it was read."""
         with self._context():
             self._require(Feature.WRITE)
             if isinstance(item, str):

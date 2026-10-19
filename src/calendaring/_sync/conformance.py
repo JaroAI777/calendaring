@@ -645,6 +645,10 @@ class SyncConformance:
         collection.delete(nid(other))
         with pytest.raises(NotFoundError):
             collection.get(other.uid)
+        with pytest.raises(NotFoundError):
+            collection.delete(nid(other))
+        with pytest.raises(NotFoundError):
+            collection.delete(stale, overwrite=True)
 
     def test_read_only_rejects_every_write(self, backend: Backend, collection: Collection) -> None:
         if writable(collection):

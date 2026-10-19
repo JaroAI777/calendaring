@@ -645,6 +645,10 @@ class AsyncConformance:
         await collection.delete(nid(other))
         with pytest.raises(NotFoundError):
             await collection.get(other.uid)
+        with pytest.raises(NotFoundError):
+            await collection.delete(nid(other))
+        with pytest.raises(NotFoundError):
+            await collection.delete(stale, overwrite=True)
 
     async def test_read_only_rejects_every_write(self, backend: AsyncBackend, collection: AsyncCollection) -> None:
         if writable(collection):

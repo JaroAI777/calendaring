@@ -3,14 +3,26 @@
 
 from __future__ import annotations
 
+import base64
+import dataclasses
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
-from calendaring import Backend, Collection, Component, ConfigurationError, SyncTokenError
+from calendaring import (
+    Backend,
+    Collection,
+    Component,
+    ConfigurationError,
+    ConflictError,
+    NotFoundError,
+    SyncTokenError,
+)
 
 pytest.importorskip("caldav")
+
+from calendaring._sync.caldav import _name_of  # noqa: E402
 
 
 @pytest.fixture
@@ -63,3 +75,51 @@ def test_a_token_is_bearer_auth() -> None:
 def test_an_option_caldav_does_not_take_is_a_configuration_error() -> None:
     with pytest.raises(ConfigurationError, match="no_such_option"):
         Backend.open("https://dav.example.com/", kind="caldav", no_such_option=1)
+
+
+def weakened(collection: Collection, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every ETag read from the server weak, as GMX hands them out."""
+    stored = collection._stored  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        collection, "_stored", lambda obj: dataclasses.replace(stored(obj), etag="W/" + stored(obj).etag)
+    )
+
+
+def test_a_weak_etag_still_refuses_a_stale_write(
+    collection: Collection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored = collection.add_task(summary="weak")
+    weakened(collection, monkeypatch)
+    mine = collection.get_by_native_id(stored.native_id or "")
+    theirs = collection.get_by_native_id(stored.native_id or "")
+    assert (mine.etag or "").startswith("W/")
+    theirs.component["SUMMARY"] = "theirs"
+    theirs.save()
+    mine.component["SUMMARY"] = "mine"
+    with pytest.raises(ConflictError):
+        mine.save()
+    with pytest.raises(ConflictError):
+        collection.delete(mine)
+    fresh = collection.get_by_native_id(stored.native_id or "")
+    fresh.component["SUMMARY"] = "fresh"
+    fresh.save()
+    collection.delete(collection.get_by_native_id(stored.native_id or ""))
+    with pytest.raises(NotFoundError):
+        collection.get_by_native_id(stored.native_id or "")
+
+
+def test_a_native_id_with_a_slash_round_trips(collection: Collection) -> None:
+    # Xandikos refuses such a name, so this checks the mapping, not a server.
+    caldav_collection: Any = collection
+    href = caldav_collection._href("a/b.ics")
+    assert href == caldav_collection.url + "a%2Fb.ics"
+    assert _name_of(href) == "a/b.ics"
+
+
+def test_a_token_from_elsewhere_is_refused(collection: Collection) -> None:
+    caldav_collection: Any = collection
+    foreign = base64.urlsafe_b64encode(b'{"collection": "other", "sync-token": "t1"}').decode()
+    for token in (foreign, "not base64!", base64.urlsafe_b64encode(b"[]").decode()):
+        with pytest.raises(SyncTokenError):
+            caldav_collection._decode_server_token(token)
+    assert caldav_collection._decode_server_token(caldav_collection._encode_server_token("t1")) == "t1"

@@ -350,7 +350,7 @@ class AsyncCollection:
                    wire: bytes | None = None,
                    loss: LossPolicy | None = None, verify: bool | None = None) -> AsyncItem: ...
                    # scope: occurrences only, see "Recurrence"; verify: see "What happens when ... unsupported"
-    async def delete(self, item: Item | str, *, overwrite: bool = False) -> None: ...
+    async def delete(self, item: Item | str, *, overwrite: bool = False) -> None: ...  # NotFoundError if gone
     async def complete(self, task: Task, at: datetime | None = None,
                        mode: Literal["safe", "this_and_future"] = "safe",
                        *, loss: LossPolicy | None = None, verify: bool | None = None) -> AsyncTask: ...
@@ -1058,7 +1058,7 @@ initial set:
 | `search.server-side`, `search.time-range`, `search.text` | how much the server filters; never affects results ([§4 Search](#4-search)) |
 | `changes` | `changes()`: `FULL` with a native token, `EMULATED` by listing |
 | `changes.known` | `changes(known=...)` fetches only what changed: `FULL` where etags can be listed without content (CalDAV, vdir), `EMULATED` where everything is read and compared (JMAP, single `.ics` file, feed, Gitea) |
-| `write.wire` | `add(wire=...)`, `save(wire=...)`: given bytes are sent as they are; `FULL` on CalDAV and vdir, `UNSUPPORTED` elsewhere |
+| `write.wire` | `add(wire=...)`, `save(wire=...)`: given bytes are sent as they are; `FULL` on vdir, and on CalDAV once caldav sends given bytes unchanged ([caldav #763](https://github.com/python-caldav/caldav/issues/763)); `UNSUPPORTED` elsewhere |
 | `write.conditional` | `FULL` with an atomic precondition (ETag, `content_version`); `EMULATED` read-compare-write |
 | `identity.client-uid`, `identity.foreign-id` | [§3.2 Identity](#32-identity) |
 | `identity.client-native-id` | `add(native_id=...)`: the caller may name the stored object (CalDAV href, vdir file name) |
@@ -1257,7 +1257,7 @@ Adopts vdirsyncer's contract ([prior art §1.2, vdirsyncer](PRIOR_ART_AND_DECISI
 
 | Backend | `etag` | `write.conditional` |
 |---|---|---|
-| CalDAV | the server's ETag | `FULL` (`If-Match`) |
+| CalDAV | the server's ETag | `FULL` (`If-Match`); for a weak ETag, which `If-Match` cannot match (GMX), a read-compare-write that can race |
 | files, vdir | `f"{st_mtime_ns};{st_ino}"` | `EMULATED`: compare, then atomic rename |
 | files, single `.ics` | hash of the item's serialisation | `EMULATED` |
 | feed | hash of the item's serialisation | n/a (read-only) |
