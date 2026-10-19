@@ -387,3 +387,18 @@ async def test_http_urls_are_caldav_until_the_feed_probe_exists() -> None:
     backend = await AsyncBackend.connect("https://caldav.example.com/dav/", username="u", password="p")
     async with backend:
         assert backend.kind == "caldav"
+
+
+async def test_get_on_overrides_without_a_master_returns_the_earliest() -> None:
+    backend = AsyncMemoryBackend()
+    collection = await backend.collection("default")
+    assert isinstance(collection, AsyncMemoryCollection)
+    later = Event.new(summary="later", start=at(5, 9), end=at(5, 10), uid="invited")
+    later.component.add("RECURRENCE-ID", at(5, 9))
+    earlier = Event.new(summary="earlier", start=at(2, 9), end=at(2, 10), uid="invited")
+    earlier.component.add("RECURRENCE-ID", at(2, 9))
+    later.icalendar.add_component(earlier.component)
+    collection.store.put(later.to_ical())
+    found = await collection.get("invited")
+    assert found.is_occurrence
+    assert str(found.component["SUMMARY"]) == "earlier"

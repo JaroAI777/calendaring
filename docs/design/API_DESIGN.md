@@ -656,7 +656,11 @@ does not carry. Occurrences come from three places:
   backend's choice ([§9](#9-migrating-from-caldav), `server_expand`);
 - a stored object that holds overrides without their master, which RFC 4791
   §4.1 allows, e.g. for an attendee invited to some instances only. The
-  backend hands out one occurrence item per override.
+  backend hands out one occurrence item per override. `get(uid)` returns
+  only the one with the earliest `RECURRENCE-ID` (decided 2026-10-19,
+  roadmap 2.1), since there is no master to be the whole item. This may
+  be a problem: a caller expecting `get()` to return everything under a
+  UID silently misses the other occurrences. `search()` returns them all.
 
 Several occurrences of one series are several items. They share a `uid`,
 and on a stored series they share a `native_id` and an `etag` too.

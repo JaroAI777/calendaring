@@ -52,6 +52,17 @@ COMPONENT_FEATURE = {
 }
 
 
+def _occurs_at(item: Item) -> datetime:
+    """Where an occurrence sorts: its ``RECURRENCE-ID`` as an aware instant (floating counts as UTC)."""
+    rid = item.component.get("RECURRENCE-ID")
+    if rid is None:
+        return datetime.min.replace(tzinfo=UTC)
+    value = rid.dt
+    if not isinstance(value, datetime):
+        value = datetime(value.year, value.month, value.day)
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 class Collection(ABC):
     """What holds items: a calendar, a task list, a directory, a repository."""
 
@@ -449,8 +460,9 @@ class Collection(ABC):
         return [i for i in self.search(journal=True, **filters) if isinstance(i, SyncJournal)]
 
     def get(self, uid: str) -> SyncItem:
+        """The item with this UID.  Overrides stored without their master: the earliest occurrence (§3.1)."""
         with self._context():
-            return self._one(self._find_uid(uid))
+            return min(self._bound(self._find_uid(uid)), key=_occurs_at)
 
     def get_by_native_id(self, native_id: str) -> SyncItem:
         with self._context():
