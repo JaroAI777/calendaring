@@ -45,8 +45,10 @@ REPLACEMENTS = {
     "AsyncCalDAVCollection": "CalDAVCollection",
     # the per-mode layer (calendaring/_concurrency.py)
     "agather": "gather",
-    # the caldav bridge (calendaring/_caldav_io.py)
+    # the caldav bridge (_async/dav.py over calendaring/_caldav_io.py)
     "AsyncDAV": "DAV",
+    "AsyncDAVClient": "DAVClient",
+    "_awaited": "_returned",
 }
 
 RULE = unasync.Rule("/_async/", "/_sync/", additional_replacements=REPLACEMENTS)

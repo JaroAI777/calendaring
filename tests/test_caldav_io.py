@@ -1,4 +1,4 @@
-"""The caldav shim's two modes match, method for method (roadmap 2.1)."""
+"""The caldav shim's generated sync mode still matches the async one, method for method (roadmap 2.1)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,8 @@ import pytest
 
 pytest.importorskip("caldav")
 
-from calendaring._caldav_io import DAV, AsyncDAV  # noqa: E402
+from calendaring._async.dav import AsyncDAV  # noqa: E402
+from calendaring._sync.dav import DAV  # noqa: E402
 
 
 def methods(cls: type) -> dict[str, inspect.Signature]:
