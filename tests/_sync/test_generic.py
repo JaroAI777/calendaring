@@ -173,15 +173,12 @@ def test_completed_is_utc() -> None:
     assert b"COMPLETED:20261101T120000Z" in task.to_ical()
 
 
-def test_deleting_an_occurrence_is_a_library_limitation() -> None:
+def test_an_occurrence_is_not_a_whole_object_for_wire() -> None:
     collection = MemoryBackend().collection("default")
     series = Event.new(summary="daily", start=at(1, 9), end=at(1, 10))
     series.component.add("RRULE", {"FREQ": "DAILY", "COUNT": 5})
     collection.add(series)
     first = (collection.search(event=True, start=at(2, 0), end=at(2, 23), expand=True))[0]
-    with pytest.raises(UnsupportedError) as info:
-        collection.delete(first)
-    assert info.value.feature is None
     with pytest.raises(ValueError, match="wire"):
         collection.save(first, wire=b"")
 

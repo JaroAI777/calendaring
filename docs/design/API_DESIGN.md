@@ -1631,38 +1631,39 @@ marked as not blocking; none blocks
     [what is in the way of a calendaring adapter](https://github.com/pycalendar/calendaring-sync/pull/19#issuecomment-6114023463);
     server evidence on calendaring-sync's
     [`evidence` branch](https://github.com/pycalendar/calendaring-sync/tree/evidence).
-12. *Deferred, 2026-10-13:* **Occurrence items: `delete()` and the shared etag**
+12. *Decided, 2026-10-19 (roadmap 2.1):* **Occurrence items: `delete()` and the shared etag**
     ([What an item contains](#what-an-item-contains)). Occurrences of one
     stored series share its `native_id` and `etag`, so the rules for a whole
-    object do not carry over. The proposals below are drafts. The author
-    recalls reasons for preferring `STATUS:CANCELLED` over `EXDATE`, to be
-    written down when this is settled.
-    [#398](https://github.com/python-caldav/caldav/issues/398) prefers
-    `CANCELLED` to raising an error from `delete()`, since a traceback will
-    reach some end user sooner or later. To be settled before
-    [roadmap 2.1](ROADMAP.md#21-caldav-backend) implements `delete()` on an
-    occurrence.
-    - **`delete(occurrence)`** must not delete the stored series, which
-      caldav may do today: caldav
-      [#398](https://github.com/python-caldav/caldav/issues/398) suspects
-      it, and nobody has tested it.
-      Two options. **`EXDATE`:** remove that occurrence's override, if
-      there is one, and add an `EXDATE` to the master. When there is no
-      master, remove the override, and delete the stored object only when
-      it was the last one. **`STATUS:CANCELLED`**, which #398 suggests and
-      the author leans towards: set it on the occurrence's override,
-      creating the override if needed. The occurrence stays visible as
-      cancelled, so this is an edit rather than a deletion.
-    - **Conflicts between siblings.** Saving one occurrence changes the
-      stored object's etag under its siblings. If a sibling's save then
-      required the etag it was read with, it would raise `ConflictError`
-      for an edit nobody made to it. **Proposal:** `save(occurrence)`
-      already fetches the stored object to merge into, so it raises only if
-      *that occurrence* changed since it was read, and writes with the
-      fresh etag. For an overridden occurrence the check is the override's
-      `SEQUENCE` or `LAST-MODIFIED`. A generated occurrence has no override,
-      and a concurrent edit of the master (its `RRULE`, its `DTSTART`)
-      changes it too, so there the check is the master's.
+    object do not carry over.
+    - **`delete(occurrence)` writes an `EXDATE`** on the master and removes
+      that occurrence's override, if there is one. When there is no master,
+      it removes the override, and deletes the stored object only when it was
+      the last one. The `EXDATE` takes the master's `DTSTART` form (a date, a
+      date-time in the same `TZID`, UTC or floating). The `EXDATE` bugs found
+      in clients (Exchange 2010, Lightning, khal) all came from comparing the
+      two in different forms.
+    - **Why not `STATUS:CANCELLED`**, which the author leaned towards, and
+      which caldav planned in
+      [#35](https://github.com/python-caldav/caldav/issues/35) and
+      [#598](https://github.com/python-caldav/caldav/issues/598):
+      "delete" and "cancel" are different operations, as #35 itself says.
+      A consumer that does not filter cancelled events shows a cancelled
+      override as live (Home Assistant until
+      [core #180947](https://github.com/home-assistant/core/pull/180947)), and
+      Home Assistant's own occurrence deletion
+      ([core #176565](https://github.com/home-assistant/core/pull/176565))
+      uses `EXDATE`. Cancelling an occurrence is a separate `cancel()`, not
+      built yet: it writes an override, so it waits for the
+      `save(occurrence)` merge (Q3).
+    - **Conflicts between siblings.** Saving or deleting one occurrence
+      changes the stored object's etag under its siblings. So `delete()`
+      fetches the stored object, and raises `ConflictError` only if *that
+      occurrence* changed since it was read: its override, or the
+      occurrence generated from the master (a changed `RRULE`, `DTSTART` or
+      `SUMMARY` changes it). It then writes with the fresh etag.
+      `overwrite=True` skips the check. An occurrence already gone is
+      `NotFoundError`. `save(occurrence)` will follow the
+      same rule when the merge (Q3) lands.
 13. *Decided, 2026-10-15* **Change tracking** (the reviewer's "borrowing",
     [PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4237509309)).
 

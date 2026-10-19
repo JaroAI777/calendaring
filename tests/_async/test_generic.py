@@ -173,15 +173,12 @@ async def test_completed_is_utc() -> None:
     assert b"COMPLETED:20261101T120000Z" in task.to_ical()
 
 
-async def test_deleting_an_occurrence_is_a_library_limitation() -> None:
+async def test_an_occurrence_is_not_a_whole_object_for_wire() -> None:
     collection = await AsyncMemoryBackend().collection("default")
     series = Event.new(summary="daily", start=at(1, 9), end=at(1, 10))
     series.component.add("RRULE", {"FREQ": "DAILY", "COUNT": 5})
     await collection.add(series)
     first = (await collection.search(event=True, start=at(2, 0), end=at(2, 23), expand=True))[0]
-    with pytest.raises(UnsupportedError) as info:
-        await collection.delete(first)
-    assert info.value.feature is None
     with pytest.raises(ValueError, match="wire"):
         await collection.save(first, wire=b"")
 

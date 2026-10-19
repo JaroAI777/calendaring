@@ -33,6 +33,7 @@ import uuid
 from collections.abc import Iterator, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import icalendar
 import pytest
@@ -952,6 +953,72 @@ class SyncConformance:
         collection.save(first)
         again = stored_by(collection.search(event=True, start=at(2), end=at(4), expand=True), seeded)
         assert sorted(str(i.component["SUMMARY"]) for i in again) == ["R: daily", "R: moved"]
+
+    def recurring_series(self, collection: Collection) -> SyncEvent:
+        """A stored daily series in Europe/Oslo time, with day 3 moved (an override), or the test ends here."""
+        if not writable(collection):
+            self.assert_read_only(collection)
+            pytest.skip("read-only collection: the write paths were checked to raise")
+        if not holds(collection, Component.EVENT):
+            pytest.skip("the collection holds no events")
+        if level(collection, Feature.RECURRENCE) is Support.UNSUPPORTED:
+            pytest.skip("nothing recurs: test_expanded_search_returns_occurrences checks the refusal")
+        oslo = ZoneInfo("Europe/Oslo")
+        start = at(1, 9).astimezone(oslo)
+        series = Event.new(summary="R: daily", start=start, end=start + timedelta(hours=1))
+        series.component.add("RRULE", {"FREQ": "DAILY", "COUNT": 5})
+        moved = Event.new(summary="R: moved", start=start + timedelta(days=2, hours=5), uid=series.uid)
+        moved.component["DTEND"] = icalendar.vDDDTypes(start + timedelta(days=2, hours=6))
+        moved.component.add("RECURRENCE-ID", start + timedelta(days=2))
+        series.icalendar.add_component(moved.component)
+        series.icalendar.add_missing_timezones()
+        [stored] = self.seed(collection, [series])
+        assert isinstance(stored, SyncEvent)
+        return stored
+
+    def occurrences(self, collection: Collection, series: SyncItem) -> dict[int, SyncItem]:
+        """The series' occurrences, by day of the month of their RECURRENCE-ID."""
+        found = collection.search(event=True, start=at(1, 0), end=at(9, 0), expand=True)
+        return {i.component.decoded("RECURRENCE-ID").day: i for i in found if i.uid == series.uid}
+
+    def test_delete_one_occurrence(self, collection: Collection) -> None:
+        series = self.recurring_series(collection)
+        before = self.occurrences(collection, series)
+        assert sorted(before) == [1, 2, 3, 4, 5]
+        collection.delete(before[2])
+        with pytest.raises(NotFoundError):
+            collection.delete(before[2])  # already gone
+        collection.delete(before[3])  # the moved one
+        after = self.occurrences(collection, series)
+        assert sorted(after) == [1, 4, 5]
+        stored = collection.get(series.uid)
+        assert not stored.is_occurrence, "deleting an occurrence deleted the series"
+        dtstart = stored.component["DTSTART"]
+        exdates = stored.component.get("EXDATE")
+        exdates = exdates if isinstance(exdates, list) else [exdates]
+        assert sorted(d.dt for e in exdates for d in e.dts) == [
+            before[2].component.decoded("RECURRENCE-ID"),
+            before[3].component.decoded("RECURRENCE-ID"),
+        ]
+        assert all(e.params.get("TZID") == dtstart.params.get("TZID") for e in exdates), "EXDATE not in DTSTART's form"
+        assert not [c for c in stored.icalendar.walk("VEVENT") if "RECURRENCE-ID" in c], "the override was kept"
+
+    def test_delete_an_occurrence_read_before_a_sibling_was_deleted(self, collection: Collection) -> None:
+        series = self.recurring_series(collection)
+        read = self.occurrences(collection, series)
+        collection.delete(read[4])
+        collection.delete(read[5])  # its etag is stale, but the occurrence itself is unchanged (Q12)
+        assert sorted(self.occurrences(collection, series)) == [1, 2, 3]
+
+    def test_delete_an_occurrence_changed_since_it_was_read(self, collection: Collection) -> None:
+        series = self.recurring_series(collection)
+        read = self.occurrences(collection, series)
+        series.component["SUMMARY"] = "R: renamed"
+        collection.save(series)
+        with pytest.raises(ConflictError):
+            collection.delete(read[2])
+        collection.delete(read[2], overwrite=True)
+        assert sorted(self.occurrences(collection, series)) == [1, 3, 4, 5]
 
     # === relatives ====================================================
 

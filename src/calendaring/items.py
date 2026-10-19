@@ -83,6 +83,46 @@ def split_stored(calendar: icalendar.Calendar) -> list[icalendar.Calendar]:
     return out
 
 
+def without_occurrence(calendar: icalendar.Calendar, uid: str, rid: date | datetime) -> icalendar.Calendar:
+    """A copy with one occurrence gone: its override removed, and an ``EXDATE`` on the master.
+
+    The ``EXDATE`` takes the master's ``DTSTART`` form (a date, a date-time
+    in its ``TZID``, UTC or floating): clients that compare the two in
+    different forms have ignored it (Exchange 2010, Lightning, khal).  A
+    master without ``DTSTART`` (invalid with an ``RRULE``, but seen) gets the
+    ``RECURRENCE-ID``'s own form.
+    """
+    out = copy.deepcopy(calendar)
+    for component in list(out.subcomponents):
+        if str(component.get("UID")) == uid and component.get("RECURRENCE-ID") is not None:
+            if _same_instant(component.decoded("RECURRENCE-ID"), rid):
+                out.subcomponents.remove(component)
+    for master in _items_of(out):
+        if str(master.get("UID")) == uid and "RECURRENCE-ID" not in master:
+            master.add("EXDATE", _in_form_of(master.decoded("DTSTART"), rid) if "DTSTART" in master else rid)
+    return out
+
+
+def _same_instant(a: date | datetime, b: date | datetime) -> bool:
+    """Equal as RECURRENCE-IDs: both dates, both floating, or both aware and the same instant."""
+    if isinstance(a, datetime) != isinstance(b, datetime):
+        return False
+    if isinstance(a, datetime) and isinstance(b, datetime) and (a.tzinfo is None) != (b.tzinfo is None):
+        return False
+    return a == b
+
+
+def _in_form_of(dtstart: date | datetime, rid: date | datetime) -> date | datetime:
+    """``rid`` written the way ``dtstart`` is: a date, the same zone, or floating."""
+    if not isinstance(dtstart, datetime):
+        return rid.date() if isinstance(rid, datetime) else rid
+    if not isinstance(rid, datetime):
+        rid = datetime(rid.year, rid.month, rid.day, dtstart.hour, dtstart.minute, dtstart.second)
+    if dtstart.tzinfo is None:
+        return rid.replace(tzinfo=None)
+    return rid.astimezone(dtstart.tzinfo) if rid.tzinfo is not None else rid.replace(tzinfo=dtstart.tzinfo)
+
+
 class Item:
     """One event, task or journal: one ``VCALENDAR`` with the components of one ``UID``.
 
