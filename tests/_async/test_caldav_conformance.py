@@ -17,7 +17,7 @@ class CalDAVConformance(AsyncConformance):
     server: Any
 
     async def open_backend(self) -> AsyncBackend:
-        return await AsyncBackend.connect(
+        return await AsyncBackend.open(
             self.server.url,
             kind="caldav",
             username=self.server.username,

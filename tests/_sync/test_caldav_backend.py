@@ -15,7 +15,7 @@ pytest.importorskip("caldav")
 
 @pytest.fixture
 def collection(xandikos_server: Any) -> Iterator[Collection]:
-    backend = Backend.connect(
+    backend = Backend.open(
         xandikos_server.url,
         kind="caldav",
         username=xandikos_server.username,
@@ -54,7 +54,7 @@ def test_an_incomplete_incremental_sync_asks_to_start_again(
 
 
 def test_a_token_is_bearer_auth() -> None:
-    backend = Backend.connect("https://dav.example.com/", kind="caldav", token="s3cret")
+    backend = Backend.open("https://dav.example.com/", kind="caldav", token="s3cret")
     with backend:
         assert backend.native.auth_type == "bearer"  # type: ignore[attr-defined]
         assert backend.native.password in ("s3cret", b"s3cret")  # type: ignore[attr-defined]  # bytes in sync mode
@@ -62,4 +62,4 @@ def test_a_token_is_bearer_auth() -> None:
 
 def test_an_option_caldav_does_not_take_is_a_configuration_error() -> None:
     with pytest.raises(ConfigurationError, match="no_such_option"):
-        Backend.connect("https://dav.example.com/", kind="caldav", no_such_option=1)
+        Backend.open("https://dav.example.com/", kind="caldav", no_such_option=1)

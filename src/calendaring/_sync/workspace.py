@@ -42,7 +42,7 @@ TEST_PREFIX = "test_"
 
 
 def _section_params(conn: calendaring_config.Connection) -> tuple[str, str, dict[str, Any]]:
-    """The section name, its url and the rest of ``connect()``'s keywords, the id included.
+    """The section name, its url and the rest of ``open()``'s keywords, the id included.
 
     Keys starting with ``test_`` are for test tooling (caldav's test-server
     selection, say) and never reach a backend.
@@ -66,7 +66,7 @@ class Workspace:
         """One backend per section ``section`` stands for, each with the section's name as its id.
 
         The file, its discovery and its secrets are calendaring-config's
-        (its ``docs/format.md``); every problem with them, or with connecting
+        (its ``docs/format.md``); every problem with them, or with opening
         a section, is a ``ConfigurationError`` naming the section.  Connections
         from the environment get the id ``environment-<kind>``.
         """
@@ -88,7 +88,7 @@ class Workspace:
         try:
             for (name, url, params), conn in zip(sections, connections, strict=True):
                 try:
-                    backends.append(Backend.connect(url, kind=conn.kind, **params))
+                    backends.append(Backend.open(url, kind=conn.kind, **params))
                 except Exception as e:
                     message = str(e).replace(url, _without_credentials(url))
                     raise ConfigurationError(f"section {name}: {message}") from None

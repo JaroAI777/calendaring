@@ -107,7 +107,7 @@ class MemoryCollection(Collection):
 
 
 class MemoryBackend(Backend):
-    """``AsyncMemoryBackend(profile=TRACKER)``, or ``AsyncBackend.connect("memory:")``."""
+    """``AsyncMemoryBackend(profile=TRACKER)``, or ``AsyncBackend.open("memory:")``."""
 
     kind = "memory"
     collection_class: ClassVar[type[MemoryCollection]] = MemoryCollection
@@ -128,7 +128,7 @@ class MemoryBackend(Backend):
         )
 
     @classmethod
-    def _connect(cls, url: str, **options: Any) -> MemoryBackend:
+    def _open(cls, url: str, **options: Any) -> MemoryBackend:
         for unused in ("username", "password", "token", "session"):
             options.pop(unused, None)
         return cls(**options)

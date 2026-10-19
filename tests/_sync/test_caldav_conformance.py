@@ -17,7 +17,7 @@ class CalDAVConformance(SyncConformance):
     server: Any
 
     def open_backend(self) -> Backend:
-        return Backend.connect(
+        return Backend.open(
             self.server.url,
             kind="caldav",
             username=self.server.username,

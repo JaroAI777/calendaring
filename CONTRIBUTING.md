@@ -79,8 +79,8 @@ annotated, and do not silence an `unused-coroutine` error.
 1. Write it in `src/calendaring/_async/<name>.py` as `Async<Name>Backend`
    and `Async<Name>Collection`, subclassing `AsyncBackend` and
    `AsyncCollection`.  Set `kind = "<name>"` on the backend class, so
-   `Backend.connect(kind="<name>")` finds it.  The backend implements
-   `_connect` and `collections`; the collection implements the primitives
+   `Backend.open(kind="<name>")` finds it.  The backend implements
+   `_open` and `collections`; the collection implements the primitives
    (`_query`, `_fetch`, `_create`, `_update`, `_delete`).  Capability
    checks, loss policies, client-side filtering and the rest are written
    once in the base classes.  `_async/memory.py`, the reference backend,
@@ -94,7 +94,7 @@ annotated, and do not silence an `unused-coroutine` error.
 4. Run the generator, and import both modes from a public module (as
    `calendaring/memory.py` does).  Import that module in
    `calendaring/__init__.py`: a backend registers its `kind` when it is
-   imported, so until then `connect()` cannot find it.
+   imported, so until then `open()` cannot find it.
 5. Add `tests/_async/test_<name>_conformance.py`, with a class that
    subclasses `calendaring.testing.AsyncConformance` and returns the
    backend from `open_backend()`.  The generator writes the sync tests.

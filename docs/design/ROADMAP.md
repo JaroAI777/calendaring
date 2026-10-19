@@ -344,7 +344,7 @@ Notes from doing it:
   project's own configuration, over the planted mistakes in
   `tests/specimens/` and asserts that exactly the marked lines are
   flagged, in both modes.  The correct calls in the same files are 0.2's
-  case 1, for the main entry points (`connect`, `collection`, `save`,
+  case 1, for the main entry points (`open`, `collection`, `save`,
   `complete`, `tasks`, `iter_search`, `search`).  The shapes the checkers miss, such as a missing `await` in a
   comprehension, are planted unmarked, so a checker that starts or stops
   catching one fails the test.  The plain `mypy` and `ruff check .` runs
@@ -404,8 +404,8 @@ therefore has a committed downstream consumer and should not be trimmed.
 - [x] Leave room for backends beyond the funded ones without format changes:
       GitHub first, then any plugin backend.  A section's `kind` names any
       registered backend; a GitHub section still needs `url` until
-      `connect()` makes it optional, a gap the
-      [configuration proposal](CONFIGURATION_PROPOSAL.md#the-format-f2-a-kind-key-with-the-keys-backendconnect-takes)
+      `open()` makes it optional, a gap the
+      [configuration proposal](CONFIGURATION_PROPOSAL.md#the-format-f2-a-kind-key-with-the-keys-backendopen-takes)
       notes.
 - [x] Document the format: calendaring-config's `docs/format.md`
 
@@ -703,7 +703,7 @@ effort is budgeted inside Phases 1 and 2.
 - **Dependencies:** 4.1
 
 **Tasks:**
-- [ ] Getting started: connect, list, read
+- [ ] Getting started: open, list, read
 - [ ] CRUD for events and for tasks
 - [ ] Searching and filtering
 - [ ] The same program run against three different backends — the project's whole

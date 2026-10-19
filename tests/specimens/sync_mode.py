@@ -11,7 +11,7 @@ from calendaring import Backend, Collection, SyncTask, Task, Workspace
 
 
 def correct(workspace: Workspace, task: Task) -> str:
-    backend = Backend.connect("memory:")
+    backend = Backend.open("memory:")
     coll = backend.collection("default")
     saved = coll.save(task)
     saved.save()
@@ -33,6 +33,6 @@ async def bound_spurious(task: SyncTask) -> None:
 
 
 async def more_spurious(workspace: Workspace) -> None:
-    await Backend.connect("memory:")  # expect: misc
+    await Backend.open("memory:")  # expect: misc
     await workspace.search()  # expect: misc
     await Workspace.from_config()  # expect: misc

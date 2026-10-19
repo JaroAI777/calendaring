@@ -189,7 +189,7 @@ class AsyncCalDAVCollection(AsyncCollection):
 
 
 class AsyncCalDAVBackend(AsyncBackend):
-    """``AsyncBackend.connect("https://...", kind="caldav", username=..., password=...)``."""
+    """``AsyncBackend.open("https://...", kind="caldav", username=..., password=...)``."""
 
     kind = "caldav"
     collection_class: ClassVar[type[AsyncCalDAVCollection]] = AsyncCalDAVCollection
@@ -201,7 +201,7 @@ class AsyncCalDAVBackend(AsyncBackend):
         )
 
     @classmethod
-    async def _connect(cls, url: str, **options: Any) -> AsyncCalDAVBackend:
+    async def _open(cls, url: str, **options: Any) -> AsyncCalDAVBackend:
         if options.pop("session", None) is not None:
             raise ConfigurationError("the caldav backend cannot use a caller's session yet")
         token = options.pop("token", None)

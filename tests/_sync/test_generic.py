@@ -40,14 +40,14 @@ def at(day: int, hour: int = 12) -> datetime:
     return datetime(2026, 11, day, hour, tzinfo=UTC)
 
 
-def test_connect_picks_the_kind_from_the_url() -> None:
-    backend = Backend.connect("memory:", id="from-url")
+def test_open_picks_the_kind_from_the_url() -> None:
+    backend = Backend.open("memory:", id="from-url")
     assert isinstance(backend, MemoryBackend)
     assert backend.id == "from-url"
     with pytest.raises(ConfigurationError):
-        Backend.connect("gopher://calendar.example.com/")
+        Backend.open("gopher://calendar.example.com/")
     with pytest.raises(ConfigurationError):
-        Backend.connect("memory:", kind="no-such-kind")
+        Backend.open("memory:", kind="no-such-kind")
 
 
 def test_verify_catches_a_silent_drop() -> None:
@@ -376,12 +376,12 @@ def test_the_default_token_scope_is_kind_backend_and_collection() -> None:
 def test_a_backend_from_a_missing_extra_says_what_to_install(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Backend, "_kinds", {k: v for k, v in Backend._kinds.items() if k != "caldav"})
     with pytest.raises(ConfigurationError, match=r"pip install 'calendaring\[caldav\]'"):
-        Backend.connect("https://caldav.example.com/", kind="caldav")
+        Backend.open("https://caldav.example.com/", kind="caldav")
 
 
 def test_http_urls_are_caldav_until_the_feed_probe_exists() -> None:
     pytest.importorskip("caldav")
-    backend = Backend.connect("https://caldav.example.com/dav/", username="u", password="p")
+    backend = Backend.open("https://caldav.example.com/dav/", username="u", password="p")
     with backend:
         assert backend.kind == "caldav"
 

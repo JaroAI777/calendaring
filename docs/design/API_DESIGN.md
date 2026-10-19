@@ -248,7 +248,7 @@ class AsyncWorkspace:
 whose `docs/format.md` specifies it ([roadmap 1.4](ROADMAP.md#14-configuration-and-credentials)).
 It makes one backend per section the name stands for, with the section's
 name as the backend's id.  It is a coroutine in async mode, since
-connecting may need the network; any problem with the file is a
+opening a backend may need the network; any problem with the file is a
 `ConfigurationError`.
 
 **Fan-out returns partial results.** `Workspace.collections` asks every
@@ -267,9 +267,9 @@ them in turn.
 ```python
 class AsyncBackend:
     @classmethod
-    async def connect(cls, url: str, *, username: str | None = None,
-                      password: str | None = None, token: str | None = None,
-                      kind: str | None = None, session: Any = None, **options: Any) -> AsyncBackend: ...
+    async def open(cls, url: str, *, username: str | None = None,
+                   password: str | None = None, token: str | None = None,
+                   kind: str | None = None, session: Any = None, **options: Any) -> AsyncBackend: ...
 
     id: str                      # stable, from config or derived from the URL
     kind: str                    # "caldav", "files", "feed", "jmap", "gitea", ...
@@ -282,23 +282,28 @@ class AsyncBackend:
     async def close(self) -> None: ...
 ```
 
-- `connect` returns the subclass for the kind it picks from the URL when
+- `open` returns the subclass for the kind it picks from the URL when
   `kind` is not given:
   `file:` or a path → files; `webcal:` → feed (fetched as `https:`, [prior art
   Part 2](PRIOR_ART_AND_DECISIONS.md#part-2-standards)); `http(s):` → probe, which is [roadmap 2.3](ROADMAP.md#23-icalendar-feed-backend-read-only-http)'s "feed or CalDAV" detection (until then, `http(s):` means CalDAV, so an `https:` feed needs `kind="feed"`);
   RFC 6764 discovery for a bare domain comes from `caldav`. Trackers cannot
   be detected and need `kind=`.
+- *Renamed 2026-10-19 from `connect`:* for CalDAV, files and feeds
+  the factory does no network I/O (caldav's `DAVClient()` only builds an
+  object, and opening a file connects to nothing), so "connect"
+  over-promised.  It stays a coroutine in async mode, since JMAP fetches
+  its session resource and a tracker may check its token.
 - `session` is the caller-owned HTTP session that Home Assistant's
   `inject-websession` rule asks for ([prior art §1.4, Home Assistant](PRIOR_ART_AND_DECISIONS.md#14-home-assistant)). A backend that cannot use
   it raises `ConfigurationError` instead of silently making its own.
 - Credentials are never required in the URL or in plain-text configuration
-  ([roadmap 1.4](ROADMAP.md#14-configuration-and-credentials)'s keyring work); `connect`'s keyword arguments are for programmatic
+  ([roadmap 1.4](ROADMAP.md#14-configuration-and-credentials)'s keyring work); `open`'s keyword arguments are for programmatic
   use.
 - *Decided 2026-10-19, with the CalDAV backend
   ([roadmap 2.1](ROADMAP.md#21-caldav-backend)):* which configuration
   keys a backend ignores.  Keys starting with `test_` are reserved for
   test tooling, and `Workspace.from_config()` drops them before
-  `connect()`.  Every other key reaches the backend, and one it does not
+  `open()`.  Every other key reaches the backend, and one it does not
   take is a `ConfigurationError` naming the section, so a typo is not
   silently ignored.  The only such keys found are caldav's test-server
   selection, `testing_allowed` and `priority`; caldav is to read
@@ -1392,7 +1397,7 @@ caldav's public API as of 2026-10-08 (caldav 3.4.0).
 
 | caldav | calendaring | |
 |---|---|---|
-| `get_davclient()`, `get_calendar(s)()`, config file | `Backend.connect()`, `Workspace.from_config()` | changed; same config file ([config proposal](CONFIGURATION_PROPOSAL.md)) |
+| `get_davclient()`, `get_calendar(s)()`, config file | `Backend.open()`, `Workspace.from_config()` | changed; same config file ([config proposal](CONFIGURATION_PROPOSAL.md)) |
 | `principal()`, `calendars()`, `make_calendar(supported_calendar_component_set=…)` | `backend.collections()`, `create_collection(components=…)` | same |
 | `get_supported_components()` | `collection.components` | same |
 | `search(…)`, `CalDAVSearcher` | `collection.search(…)` with a `Searcher` | same; caldav already post-filters client-side |
