@@ -30,6 +30,11 @@ pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commi
 make test
 ```
 
+`make dev` also installs caldav and the embedded Xandikos and Radicale
+servers, which the CalDAV backend's conformance tests run against (they are
+skipped when missing).  Radicale listens on its default port, 5232, whatever
+caldav's test helper is told, so that port must be free.
+
 ## Sync and async code
 
 The async code in the `_async/` directories is the source; the `_sync/`
@@ -50,7 +55,14 @@ copy is stale, and it also rejects what a token rewrite cannot translate:
   equivalent go in `src/calendaring/_concurrency.py`, written once per mode,
   with an entry in the replacement map (`agather` -> `gather`);
 - a third-party `Async*` name, such as `httpx.AsyncClient`, would become a
-  `SyncClient` that does not exist: wrap it in the per-mode layer too;
+  `SyncClient` that does not exist: import it through a mode-free module and
+  map it in the replacement map, as `_caldav_io.py` does for caldav's
+  `AsyncDAVClient`;
+- a library whose methods return `X | Coroutine` (caldav's dual-mode
+  objects) hides a missing `await` from the type checker: call it only
+  through a thin, honestly typed wrapper in `_async/`, as `_async/dav.py`
+  does, where one helper resolves the union per mode (`_awaited`, which the
+  generator turns into `_returned`);
 - the token right after `await` is dropped, meant to be the space:
   write `await x`, never `await(x)`;
 - a name the generator renames must not sit inside an f-string, since

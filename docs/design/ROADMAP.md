@@ -492,27 +492,30 @@ and this is the backend that will expose every place the unified API and CalDAV
 disagree.
 
 **Tasks:**
-- [ ] Map the unified API onto `caldav` 3.x
-- [ ] Map caldav's compatibility-hint/quirk system onto the capability declaration
-- [ ] Handle the sync/async impedance between caldav's dual-mode design and
+- [x] Map the unified API onto `caldav` 3.x
+- [x] Map caldav's compatibility-hint/quirk system onto the capability declaration
+- [x] Handle the sync/async impedance between caldav's dual-mode design and
       p4 as 1.3 builds it — this is the interesting part, and the part most likely
       to overrun. caldav's `Async*` names are aliases of its dual-mode classes,
       so a thin, honestly typed shim is needed for type checking to work in
       this layer at all (see 0.2's comparison, *What is not settled*), and
       every caldav name needs a replacement-map entry so the generated sync
       layer imports names that exist (`SyncDAVClient` does not)
-- [ ] Settle [API_DESIGN Q12](API_DESIGN.md#10-open-questions) (`delete()` on an
+- [x] Settle [API_DESIGN Q12](API_DESIGN.md#10-open-questions) (`delete()` on an
       occurrence, and conflicts between sibling occurrences) before mapping
       `delete()` and `save()` for occurrences
-- [ ] Tune `verify=True`'s comparison against what real servers rewrite
+- [x] Tune `verify=True`'s comparison against what real servers rewrite
       (parameter quoting, split `CATEGORIES`, TZID to UTC), and compare
       subcomponents such as `VALARM` too; it compares raw unfolded lines today
       (roadmap 1.2 review)
-- [ ] Decide what `get(uid)` returns for a stored object holding several
+- [x] Decide what `get(uid)` returns for a stored object holding several
       overrides and no master; it returns the first today (roadmap 1.2 review)
-- [ ] Pass the conformance suite
-- [ ] Record, do not silently fix, bugs found in `caldav` itself: those fixes are
+- [x] Pass the conformance suite
+- [x] Record, do not silently fix, bugs found in `caldav` itself: those fixes are
       caldav's budget, not this project's
+      ([caldav #797](https://github.com/python-caldav/caldav/issues/797), its test
+      servers; the occurrence-deletion plan is on
+      [#598](https://github.com/python-caldav/caldav/issues/598))
 
 ---
 
