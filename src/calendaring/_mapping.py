@@ -64,6 +64,9 @@ RELTYPE_FEATURE: dict[str, Feature] = {
     "SIBLING": Feature.TASK_RELATIONS_PARENT,
 }
 
+# Single date-time properties a server may store in UTC instead of with their TZID.
+INSTANTS = frozenset({"DTSTART", "DTEND", "DUE", "COMPLETED", "RECURRENCE-ID", X_PLANNED_START, X_PLANNED_END})
+
 # Properties servers legitimately change, and identity a backend may assign (§5.3).
 NOT_VERIFIED = frozenset({"DTSTAMP", "SEQUENCE", "LAST-MODIFIED", "UID"})
 
@@ -211,13 +214,71 @@ def plan_calendar_losses(calendar: icalendar.Calendar, capabilities: Capabilitie
 
 
 def property_lines(component: icalendar.Component, name: str) -> list[bytes]:
-    """One property's content lines, unfolded and sorted, for an order-insensitive comparison."""
+    """One property's content lines, unfolded and sorted, for an order-insensitive comparison.
+
+    Only the component's own: a ``VALARM``'s ``DESCRIPTION`` is not its event's.
+    """
     out = []
     for line in _lines(component):
         head = line.split(b":", 1)[0].split(b";", 1)[0]
         if head.upper() == name.encode():
             out.append(line)
     return sorted(out)
+
+
+def _comparable(component: icalendar.Component, name: str) -> list[Any]:
+    """What ``verify`` compares for a property, so that a server's harmless rewrites compare equal.
+
+    ``CATEGORIES`` is a set however it is split over lines and commas, and
+    an aware date-time on a single event is an instant, whether it is stored
+    with its TZID or in UTC.  A floating time is not an instant, and in a
+    recurring series a TZID is not either, so converting one is a change.
+    """
+    if name == "CATEGORIES":
+        return sorted({str(c) for value in _values(component, name) for c in getattr(value, "cats", [value])})
+    if name in INSTANTS and not isinstance(component.get(name), list) and not _recurs(component):
+        value = component.decoded(name)
+        if isinstance(value, datetime) and value.tzinfo is not None:
+            return [value.astimezone(UTC)]
+    return list(property_lines(component, name))
+
+
+def _recurs(component: icalendar.Component) -> bool:
+    """A series' times are local times: moved to UTC, its occurrences shift at a DST change."""
+    return "RRULE" in component or "RDATE" in component
+
+
+def _stored_as_sent(sent: icalendar.Component, stored: icalendar.Component) -> bool:
+    """Whether ``stored`` holds everything ``sent`` did, as the top level is compared: what a server adds is fine."""
+    if sent.name != stored.name:
+        return False
+    if any(
+        _comparable(sent, name) != _comparable(stored, name) for name in dict.fromkeys(sent) if name not in NOT_VERIFIED
+    ):
+        return False
+    return _matched(sent.subcomponents, stored.subcomponents)
+
+
+def _matched(sent: list[icalendar.Component], stored: list[icalendar.Component]) -> bool:
+    """Each sent subcomponent has a stored one of its own, in any order.
+
+    Tried every way, not first come first served: a sent alarm that matches two stored
+    ones must not take the one another sent alarm needs.  A component has few.
+    """
+    if not sent:
+        return True
+    first, rest = sent[0], sent[1:]
+    return any(
+        _stored_as_sent(first, other) and _matched(rest, stored[:i] + stored[i + 1 :]) for i, other in enumerate(stored)
+    )
+
+
+def _subcomponents(component: icalendar.Component, kind: str) -> list[icalendar.Component]:
+    return [c for c in component.subcomponents if c.name == kind]
+
+
+def _ical(components: list[icalendar.Component]) -> str:
+    return b"".join(c.to_ical() for c in components).decode()
 
 
 def _by_occurrence(calendar: icalendar.Calendar) -> dict[str | None, icalendar.Component]:
@@ -242,29 +303,18 @@ def differences(sent: icalendar.Calendar, stored: icalendar.Calendar) -> list[Lo
         for name in dict.fromkeys(component):
             if name in NOT_VERIFIED:
                 continue
-            mine = property_lines(component, name)
-            theirs = property_lines(other, name)
-            if mine != theirs:
+            if _comparable(component, name) != _comparable(other, name):
+                mine, theirs = property_lines(component, name), property_lines(other, name)
                 out.append(Loss(name, b"\n".join(mine).decode(), b"\n".join(theirs).decode() or None))
-        for kind in dict.fromkeys(str(c.name) for c in component.subcomponents):
-            candidates = [c for c in other.subcomponents if c.name == kind]
-            missing = []
-            for sent_part in (c for c in component.subcomponents if c.name == kind):
-                match = next((c for c in candidates if _covers(c, sent_part)), None)
-                if match is None:
-                    missing.append(sent_part)
-                else:
-                    candidates.remove(match)
-            if missing:
-                sent_text = b"".join(c.to_ical() for c in missing).decode()
-                out.append(Loss(kind, sent_text, b"".join(c.to_ical() for c in candidates).decode() or None))
+        for kind in dict.fromkeys(str(c.name) for c in [*component.subcomponents, *other.subcomponents]):
+            mine_subs = _subcomponents(component, kind)
+            theirs_subs = _subcomponents(other, kind)
+            if not _matched(mine_subs, theirs_subs):
+                # Name what was not kept: the sent ones nothing stored matches, and the stored ones that match
+                # nothing sent.  Where each matches but they cannot be paired off, that is all of them.
+                lost = [m for m in mine_subs if not any(_stored_as_sent(m, t) for t in theirs_subs)]
+                instead = [t for t in theirs_subs if not any(_stored_as_sent(m, t) for m in mine_subs)]
+                if not lost:
+                    lost, instead = mine_subs, theirs_subs
+                out.append(Loss(kind, _ical(lost), _ical(instead) or None))
     return out
-
-
-def _covers(stored: icalendar.Component, sent: icalendar.Component) -> bool:
-    """Whether ``stored`` (an alarm) holds every property of ``sent`` as sent; servers may add their own."""
-    return all(
-        property_lines(stored, name) == property_lines(sent, name)
-        for name in dict.fromkeys(sent)
-        if name not in NOT_VERIFIED
-    )
