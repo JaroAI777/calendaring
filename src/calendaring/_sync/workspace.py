@@ -37,9 +37,17 @@ def _without_credentials(url: str) -> str:
     return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
 
 
+# Reserved for test tooling: every backend ignores these keys (decided 2026-10-19, roadmap 2.1).
+TEST_PREFIX = "test_"
+
+
 def _section_params(conn: calendaring_config.Connection) -> tuple[str, str, dict[str, Any]]:
-    """The section name, its url and the rest of ``connect()``'s keywords, the id included."""
-    params = dict(conn.params)
+    """The section name, its url and the rest of ``connect()``'s keywords, the id included.
+
+    Keys starting with ``test_`` are for test tooling (caldav's test-server
+    selection, say) and never reach a backend.
+    """
+    params = {k: v for k, v in conn.params.items() if not k.startswith(TEST_PREFIX)}
     url = params.pop("url", None)
     if not isinstance(url, str) or not url:
         raise ConfigurationError(f"section {conn.name}: url must be a non-empty string")

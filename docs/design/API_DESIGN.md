@@ -294,13 +294,18 @@ class AsyncBackend:
 - Credentials are never required in the URL or in plain-text configuration
   ([roadmap 1.4](ROADMAP.md#14-configuration-and-credentials)'s keyring work); `connect`'s keyword arguments are for programmatic
   use.
-- Open: which configuration keys a backend ignores.  The shared file keeps
-  keys such as `features`, `calendar_name`, `priority` and
-  `testing_allowed`, and `Workspace.from_config()` passes every key to
-  `connect()`; today a key the backend does not take is a
-  `ConfigurationError` naming the section.  Decided with the CalDAV
-  backend ([roadmap 2.1](ROADMAP.md#21-caldav-backend)), the first one
-  whose sections carry such keys.
+- *Decided 2026-10-19, with the CalDAV backend
+  ([roadmap 2.1](ROADMAP.md#21-caldav-backend)):* which configuration
+  keys a backend ignores.  Keys starting with `test_` are reserved for
+  test tooling, and `Workspace.from_config()` drops them before
+  `connect()`.  Every other key reaches the backend, and one it does not
+  take is a `ConfigurationError` naming the section, so a typo is not
+  silently ignored.  The only such keys found are caldav's test-server
+  selection, `testing_allowed` and `priority`; caldav is to read
+  `test_allowed` and `test_priority` too (on
+  [caldav #786](https://github.com/python-caldav/caldav/issues/786)).
+  calendaring keeps no compatibility for the old names.  `features` is
+  not a test key: the CalDAV backend passes it to caldav.
 
 ### 2.3 Collection
 

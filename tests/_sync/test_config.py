@@ -46,6 +46,18 @@ def test_one_backend_per_section_named_after_it(tmp_path: Path) -> None:
     assert all(b._workspace is workspace for b in workspace.backends)
 
 
+def test_keys_for_test_tooling_are_ignored(tmp_path: Path) -> None:
+    path = write(tmp_path, {"default": {"url": "memory:", "test_allowed": True, "test_priority": 5}})
+    [backend] = (Workspace.from_config(path)).backends
+    assert isinstance(backend, MemoryBackend)
+
+
+def test_an_unknown_key_is_still_an_error(tmp_path: Path) -> None:
+    path = write(tmp_path, {"default": {"url": "memory:", "tset_allowed": True}})
+    with pytest.raises(ConfigurationError, match="section default"):
+        Workspace.from_config(path)
+
+
 def test_section_from_the_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = write(tmp_path, {"default": {"url": "memory:"}, "other": {"url": "memory:"}})
     monkeypatch.setenv("CALENDARING_CONFIG_SECTION", "other")
