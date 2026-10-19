@@ -285,7 +285,7 @@ class AsyncBackend:
 - `connect` returns the subclass for the kind it picks from the URL when
   `kind` is not given:
   `file:` or a path → files; `webcal:` → feed (fetched as `https:`, [prior art
-  Part 2](PRIOR_ART_AND_DECISIONS.md#part-2-standards)); `http(s):` → probe, which is [roadmap 2.3](ROADMAP.md#23-icalendar-feed-backend-read-only-http)'s "feed or CalDAV" detection;
+  Part 2](PRIOR_ART_AND_DECISIONS.md#part-2-standards)); `http(s):` → probe, which is [roadmap 2.3](ROADMAP.md#23-icalendar-feed-backend-read-only-http)'s "feed or CalDAV" detection (until then, `http(s):` means CalDAV, so an `https:` feed needs `kind="feed"`);
   RFC 6764 discovery for a bare domain comes from `caldav`. Trackers cannot
   be detected and need `kind=`.
 - `session` is the caller-owned HTTP session that Home Assistant's

@@ -98,7 +98,7 @@ def test_url_must_be_a_string(tmp_path: Path) -> None:
 
 
 def test_error_does_not_repeat_credentials_in_the_url(tmp_path: Path) -> None:
-    path = write(tmp_path, {"default": {"url": "https://alice:s3cret@dav.example.com/"}})
+    path = write(tmp_path, {"default": {"url": "gopher://alice:s3cret@dav.example.com/"}})
     with pytest.raises(ConfigurationError, match="section default") as info:
         Workspace.from_config(path)
     assert "s3cret" not in str(info.value)

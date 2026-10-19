@@ -30,9 +30,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+caldav = ["caldav>=3.5"]
+# Embedded CalDAV servers the caldav backend's conformance tests run against.
+test-servers = ["caldav>=3.5", "xandikos>=0.2", "radicale>=3.2"]
 # ruff and mypy are pinned exactly; keep ruff in step with .pre-commit-config.yaml.
 # So is unasync: its output is committed, and the freshness test compares bytes.
 dev = [
+  "calendaring[caldav,test-servers]",
   "pytest>=8.0",
   "pytest-asyncio>=1.0",
   "unasync==0.6.0",

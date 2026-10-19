@@ -45,7 +45,7 @@ def test_connect_picks_the_kind_from_the_url() -> None:
     assert isinstance(backend, MemoryBackend)
     assert backend.id == "from-url"
     with pytest.raises(ConfigurationError):
-        Backend.connect("https://caldav.example.com/")
+        Backend.connect("gopher://calendar.example.com/")
     with pytest.raises(ConfigurationError):
         Backend.connect("memory:", kind="no-such-kind")
 
@@ -374,3 +374,16 @@ def test_the_default_token_scope_is_kind_backend_and_collection() -> None:
         (Backend(id="home").collection("default")).changes(token)
     # Another store under the same label: the default cannot tell them apart.
     (Backend(id="work").collection("default")).changes(token)
+
+
+def test_a_backend_from_a_missing_extra_says_what_to_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Backend, "_kinds", {k: v for k, v in Backend._kinds.items() if k != "caldav"})
+    with pytest.raises(ConfigurationError, match=r"pip install 'calendaring\[caldav\]'"):
+        Backend.connect("https://caldav.example.com/", kind="caldav")
+
+
+def test_http_urls_are_caldav_until_the_feed_probe_exists() -> None:
+    pytest.importorskip("caldav")
+    backend = Backend.connect("https://caldav.example.com/dav/", username="u", password="p")
+    with backend:
+        assert backend.kind == "caldav"

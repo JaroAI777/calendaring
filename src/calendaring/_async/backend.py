@@ -20,8 +20,11 @@ if TYPE_CHECKING:
 __all__ = ["AsyncBackend"]
 
 # URL scheme -> backend kind, for connect() without kind= (§2.2).  http(s)
-# needs the "feed or CalDAV" probe of roadmap 2.3, and trackers need kind=.
-SCHEMES = {"": "files", "file": "files", "webcal": "feed", "memory": "memory"}
+# is CalDAV until the "feed or CalDAV" probe of roadmap 2.3, and trackers need kind=.
+SCHEMES = {"": "files", "file": "files", "webcal": "feed", "memory": "memory", "http": "caldav", "https": "caldav"}
+
+# Backend kinds that come with an optional extra, and its name.
+EXTRAS = {"caldav": "caldav"}
 
 
 class AsyncBackend(ABC):
@@ -82,6 +85,9 @@ class AsyncBackend(ABC):
         try:
             klass = kinds[kind]
         except KeyError:
+            if kind in EXTRAS:
+                extra = EXTRAS[kind]
+                raise ConfigurationError(f"the {kind} backend needs: pip install 'calendaring[{extra}]'") from None
             raise ConfigurationError(f"no backend of kind {kind!r} (known: {sorted(kinds)})") from None
         return await klass._connect(url, username=username, password=password, token=token, session=session, **options)
 

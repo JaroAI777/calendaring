@@ -45,7 +45,7 @@ async def test_connect_picks_the_kind_from_the_url() -> None:
     assert isinstance(backend, AsyncMemoryBackend)
     assert backend.id == "from-url"
     with pytest.raises(ConfigurationError):
-        await AsyncBackend.connect("https://caldav.example.com/")
+        await AsyncBackend.connect("gopher://calendar.example.com/")
     with pytest.raises(ConfigurationError):
         await AsyncBackend.connect("memory:", kind="no-such-kind")
 
@@ -374,3 +374,16 @@ async def test_the_default_token_scope_is_kind_backend_and_collection() -> None:
         await (await Backend(id="home").collection("default")).changes(token)
     # Another store under the same label: the default cannot tell them apart.
     await (await Backend(id="work").collection("default")).changes(token)
+
+
+async def test_a_backend_from_a_missing_extra_says_what_to_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(AsyncBackend, "_kinds", {k: v for k, v in AsyncBackend._kinds.items() if k != "caldav"})
+    with pytest.raises(ConfigurationError, match=r"pip install 'calendaring\[caldav\]'"):
+        await AsyncBackend.connect("https://caldav.example.com/", kind="caldav")
+
+
+async def test_http_urls_are_caldav_until_the_feed_probe_exists() -> None:
+    pytest.importorskip("caldav")
+    backend = await AsyncBackend.connect("https://caldav.example.com/dav/", username="u", password="p")
+    async with backend:
+        assert backend.kind == "caldav"
