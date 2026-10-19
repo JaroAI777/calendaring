@@ -122,6 +122,16 @@ KINDS: dict[Component, tuple[type[Item], str, str, type[SyncItem], Feature]] = {
     Component.JOURNAL: (Journal, "add_journal", "journals", SyncJournal, Feature.COMPONENT_JOURNAL),
 }
 
+# What a component needs to be valid: RFC 5545 requires DTSTART on a VEVENT
+# outside a scheduling message, and a server may refuse one without (Radicale).
+REQUIRED: dict[Component, dict[str, Any]] = {Component.EVENT: {"start": at(1)}}
+
+
+def minimal(kind: Component, summary: str, **properties: Any) -> Item:
+    """The smallest valid item of a kind, with ``properties`` as ``new()`` takes them."""
+    return KINDS[kind][0].new(summary=summary, **REQUIRED.get(kind, {}), **properties)
+
+
 # A feature that is about one property, and a value of it to store.
 PROPERTY_SAMPLES: dict[Feature, tuple[str, Any, dict[str, str]]] = {
     Feature.CATEGORIES: ("CATEGORIES", ["work"], {}),
@@ -392,14 +402,16 @@ class SyncConformance:
 
     @pytest.mark.parametrize("kind", list(KINDS))
     def test_add_returns_a_bound_item(self, collection: Collection, kind: Component) -> None:
-        data_class, add_name, list_name, bound_class, feature = KINDS[kind]
-        item = data_class.new(summary="conformance")
+        _, add_name, list_name, bound_class, feature = KINDS[kind]
+        item = minimal(kind, "conformance")
         if not writable(collection):
             self.assert_read_only(collection)
             return
         if not holds(collection, kind):
             self.assert_unsupported(collection, feature, lambda: collection.add(item))
-            self.assert_unsupported(collection, feature, lambda: getattr(collection, add_name)(summary="x"))
+            self.assert_unsupported(
+                collection, feature, lambda: getattr(collection, add_name)(summary="x", **REQUIRED.get(kind, {}))
+            )
             assert getattr(collection, list_name)() == []
             return
         stored = collection.add(item)
@@ -413,7 +425,7 @@ class SyncConformance:
         assert str(stored.component["SUMMARY"]) == "conformance"
         assert item.native_id is None, "add() changed its argument"
         assert item.etag is None, "add() changed its argument"
-        shorthand = getattr(collection, add_name)(summary="shorthand")
+        shorthand = getattr(collection, add_name)(summary="shorthand", **REQUIRED.get(kind, {}))
         assert isinstance(shorthand, bound_class)
         assert {i.native_id for i in getattr(collection, list_name)()} >= {stored.native_id, shorthand.native_id}
 
@@ -486,24 +498,24 @@ class SyncConformance:
 
     def test_get_finds_the_exact_uid(self, backend: Backend, collection: Collection) -> None:
         stored = []
-        for kind, (data_class, _, _, bound_class, _) in KINDS.items():
+        for kind, (_, _, _, bound_class, _) in KINDS.items():
             if holds(collection, kind) and writable(collection):
-                item = data_class.new(summary=f"get {kind.value}")
+                item = minimal(kind, f"get {kind.value}")
                 added = collection.add(item)
                 if level(collection, Feature.IDENTITY_CLIENT_UID) is not Support.UNSUPPORTED:
                     assert added.uid == item.uid, f"identity.client-uid: the {kind.value} UID was replaced"
-                stored.append((added, bound_class))
+                stored.append((added, bound_class, kind))
         if not stored:
             pytest.skip("nothing can be stored here")
-        for added, bound_class in stored:
+        for added, bound_class, _ in stored:
             found = collection.get(added.uid)
             assert isinstance(found, bound_class)
             assert found.native_id == added.native_id
         if level(collection, Feature.IDENTITY_CLIENT_UID) is not Support.UNSUPPORTED:
-            kind_class = stored[0][0].as_data().__class__
-            suffix = f"{stored[0][0].uid}@conformance.invalid"
-            longer = collection.add(kind_class.new(summary="longer", uid=f"11-{suffix}"))
-            shorter = collection.add(kind_class.new(summary="shorter", uid=f"1-{suffix}"))
+            first, _, first_kind = stored[0]
+            suffix = f"{first.uid}@conformance.invalid"
+            longer = collection.add(minimal(first_kind, "longer", uid=f"11-{suffix}"))
+            shorter = collection.add(minimal(first_kind, "shorter", uid=f"1-{suffix}"))
             assert (collection.get(shorter.uid)).native_id == shorter.native_id
             assert (collection.get(longer.uid)).native_id == longer.native_id
             with pytest.raises(NotFoundError):
@@ -523,7 +535,7 @@ class SyncConformance:
         if not writable(collection):
             return  # test_read_only_rejects_every_write checked the writes
         kind = next(k for k in KINDS if holds(collection, k))
-        item = KINDS[kind][0].new(summary="named and identified")
+        item = minimal(kind, "named and identified")
         name = f"conformance-{uuid.uuid4().hex[:12]}.ics"
         stored = collection.add(item, native_id=name)
         assert stored.uid == item.uid
@@ -547,15 +559,14 @@ class SyncConformance:
     def test_read_paths_on_seeded_items(self, collection: Collection) -> None:
         """What a read-only backend must pass too: everything here is stored through ``seed()``."""
         kind = next(k for k in KINDS if holds(collection, k))
-        new = KINDS[kind][0].new
-        [first] = self.seed(collection, [new(summary="seeded first")])
+        [first] = self.seed(collection, [minimal(kind, "seeded first")])
         assert (collection.get(first.uid)).native_id == first.native_id
         assert (collection.get_by_native_id(nid(first))).uid == first.uid
         assert (collection.reload(first)).etag == first.etag
         if level(collection, Feature.CHANGES) is Support.UNSUPPORTED:
             return
         start = collection.changes()
-        [second] = self.seed(collection, [new(summary="seeded second")])
+        [second] = self.seed(collection, [minimal(kind, "seeded second")])
         since = collection.changes(start.token)
         assert nid(second) in {nid(i) for i in since.changed}
         assert nid(first) not in {nid(i) for i in since.changed}
@@ -640,7 +651,7 @@ class SyncConformance:
         kinds = [k for k in KINDS if holds(collection, k)]
         if not kinds:
             pytest.fail("a read-only collection that holds nothing")
-        [stored] = self.seed(collection, [KINDS[kinds[0]][0].new(summary="seeded")])
+        [stored] = self.seed(collection, [minimal(kinds[0], "seeded")])
         other = self.open_collection(backend, "conformance-other")
         for call in (
             lambda: collection.add(Task.new(summary="x")),
@@ -832,8 +843,7 @@ class SyncConformance:
 
     def test_listings_are_not_cut_at_a_page(self, collection: Collection) -> None:
         kind = next(k for k in KINDS if holds(collection, k))
-        new = KINDS[kind][0].new
-        seeded = self.seed(collection, [new(summary=f"paged {n}") for n in range(self.page_size_hint)])
+        seeded = self.seed(collection, [minimal(kind, f"paged {n}") for n in range(self.page_size_hint)])
         mine = {nid(i) for i in seeded}
         assert {nid(i) for i in stored_by(collection.search(), seeded)} == mine
         assert {nid(i) for i in collection.iter_search() if i.native_id in mine} == mine
@@ -969,7 +979,7 @@ class SyncConformance:
             self.assert_unsupported(collection, Feature.CHANGES, lambda: collection.changes())
             return
         kind = next(k for k in KINDS if holds(collection, k))
-        seeded = self.seed(collection, [KINDS[kind][0].new(summary=s) for s in ("one", "two")])
+        seeded = self.seed(collection, [minimal(kind, s) for s in ("one", "two")])
         changes = collection.changes()
         assert {i.native_id for i in changes.changed} >= {i.native_id for i in seeded}
         assert changes.deleted == []
