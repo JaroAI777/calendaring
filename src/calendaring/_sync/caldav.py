@@ -9,8 +9,12 @@ of its href, unquoted), so ``add(native_id=...)`` names the resource.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import re
 import uuid
+from collections.abc import Mapping
 from typing import Any, ClassVar
 from urllib.parse import quote, unquote
 
@@ -19,10 +23,11 @@ from icalendar_searcher import Searcher
 
 from .._caldav_features import backend_capabilities, collection_capabilities
 from .._caldav_io import DAV, Calendar
-from ..errors import AlreadyExistsError, ConfigurationError, NotFoundError
+from ..capabilities import Feature
+from ..errors import AlreadyExistsError, ConfigurationError, NotFoundError, SyncTokenError
 from ..items import _items_of, _parse
 from ..loss import LossPolicy
-from ..types import Component, StoredObject
+from ..types import Component, StoredObject, SyncToken
 from .backend import Backend
 from .collection import Collection
 
@@ -88,6 +93,51 @@ class CalDAVCollection(Collection):
         if not hrefs:
             return []
         return [self._stored(o) for o in self._backend._dav.multiget(self.calendar, hrefs) if o.data is not None]
+
+    def _list_etags(self) -> dict[str, str]:
+        return {_name_of(href): etag for href, etag in (self._backend._dav.etags(self.url)).items()}
+
+    def _changes(
+        self, token: SyncToken | None, known: Mapping[str, str] | None
+    ) -> tuple[list[StoredObject], list[str], SyncToken]:
+        """The server's sync-collection report (RFC 6578) where it has one; else the inherited etag diff.
+
+        A token from the etag diff (``changes(known=...)``, or a server that
+        could not report everything at once) stays on the etag diff.
+        """
+        if self.capabilities.details(Feature.CHANGES).get("method") != "sync-token" or known is not None:
+            return super()._changes(token, known)
+        if token is not None:
+            try:
+                server_token: str | None = self._decode_server_token(token)
+            except SyncTokenError:
+                return super()._changes(token, None)  # an etag-listing token, from changes(known=...)
+        else:
+            server_token = None
+        hrefs, gone, new_token, incomplete = self._backend._dav.sync(self.calendar, server_token)
+        if new_token is None or incomplete:
+            # caldav follows a truncated report itself; one it gave up on cannot be made complete here.
+            if server_token is None:
+                return super()._changes(None, None)
+            raise SyncTokenError("the server's sync report was incomplete; start again with changes()")
+        deleted = {_name_of(href) for href in gone}
+        changed = [name for name in dict.fromkeys(_name_of(href) for href in hrefs) if name not in deleted]
+        return self._fetch_many(changed), sorted(deleted), self._encode_server_token(new_token)
+
+    def _encode_server_token(self, server_token: str) -> SyncToken:
+        raw = json.dumps({"collection": self.id, "sync-token": server_token}, sort_keys=True).encode()
+        return SyncToken(base64.urlsafe_b64encode(raw).decode())
+
+    def _decode_server_token(self, token: SyncToken) -> str:
+        try:
+            data = json.loads(base64.urlsafe_b64decode(token.encode()))
+            issued_by = data["collection"]
+            server_token = data["sync-token"]
+        except (binascii.Error, ValueError, TypeError, KeyError) as exc:
+            raise SyncTokenError(f"not a token this collection issued: {token!r}") from exc
+        if issued_by != self.id or not isinstance(server_token, str):
+            raise SyncTokenError(f"a token from another collection: {issued_by!r}")
+        return server_token
 
     def _find_uid(self, uid: str) -> StoredObject:
         return self._stored(self._backend._dav.by_uid(self.calendar, uid))

@@ -1024,6 +1024,10 @@ class AsyncConformance:
         assert result.deleted == [drop.native_id]
         with pytest.raises(ValueError, match="known"):
             await collection.changes(result.token, known=known)
+        later = await collection.add_task(summary="later")
+        following = await collection.changes(result.token)  # a known= token is a token like any other
+        assert {i.native_id for i in following.changed} == {later.native_id}
+        assert following.deleted == []
 
     async def test_a_bad_token_raises(self, collection: AsyncCollection) -> None:
         if level(collection, Feature.CHANGES) is Support.UNSUPPORTED:

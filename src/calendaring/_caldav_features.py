@@ -57,7 +57,6 @@ FIXED: dict[Feature, Any] = {
     Feature.SEARCH_TIME_RANGE: E,
     Feature.SEARCH_TEXT: E,
     Feature.CHANGES: {"level": E, "method": "etag-listing"},
-    Feature.CHANGES_KNOWN: E,
     Feature.MOVE: {"level": E, "note": "added to the target, then deleted here"},
     Feature.IDENTITY_FOREIGN_ID: {"level": U, "note": "the UID is native"},
     Feature.RECURRENCE_EDIT_OCCURRENCE: {"level": U, "note": _PENDING},
@@ -109,6 +108,19 @@ def _table(features: Any) -> dict[Feature, Any]:
     return table
 
 
+def _changes(features: Any) -> dict[str, Any]:
+    """A native change feed where the server has a reliable one; else the etag listing, which always works.
+
+    Reliable includes refusing a token it no longer honours, with an error of any kind: a server
+    that answers one with a full listing (``broken``: Stalwart, OX) would look like a report where
+    everything changed and nothing was deleted.
+    """
+    refuses = str(features.is_supported("sync-token.invalid-token", str)) != "broken"
+    if _level(features, "sync-token") is F and _level(features, "sync-token.delete") is F and refuses:
+        return {"level": F, "method": "sync-token"}
+    return {"level": E, "method": "etag-listing"}
+
+
 def backend_capabilities(features: Any) -> Capabilities:
     return Capabilities({f: v for f, v in _table(features).items() if f in BACKEND_FEATURES})
 
@@ -116,6 +128,7 @@ def backend_capabilities(features: Any) -> Capabilities:
 def collection_capabilities(features: Any, components: frozenset[Component]) -> Capabilities:
     """The server's table, narrowed to what the calendar says it holds."""
     table = {f: v for f, v in _table(features).items() if f not in BACKEND_FEATURES}
+    table[Feature.CHANGES] = _changes(features)
     for kind, (feature, name) in COMPONENT_FROM_SERVER.items():
         table[feature] = _level(features, name) if kind in components else U
     return Capabilities({f: Capability.coerce(v) for f, v in table.items()})

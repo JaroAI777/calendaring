@@ -1024,6 +1024,10 @@ class SyncConformance:
         assert result.deleted == [drop.native_id]
         with pytest.raises(ValueError, match="known"):
             collection.changes(result.token, known=known)
+        later = collection.add_task(summary="later")
+        following = collection.changes(result.token)  # a known= token is a token like any other
+        assert {i.native_id for i in following.changed} == {later.native_id}
+        assert following.deleted == []
 
     def test_a_bad_token_raises(self, collection: Collection) -> None:
         if level(collection, Feature.CHANGES) is Support.UNSUPPORTED:
