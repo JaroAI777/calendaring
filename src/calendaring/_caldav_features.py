@@ -53,7 +53,7 @@ _PENDING = "pending recurring-ical-events issue 292 (API_DESIGN.md Q3)"
 # What the backend does the same way on every server, for now.
 FIXED: dict[Feature, Any] = {
     **dict.fromkeys(Feature, F),
-    Feature.SEARCH_SERVER_SIDE: {"level": E, "note": "everything is fetched and filtered client-side"},
+    Feature.SEARCH_SERVER_SIDE: {"level": E, "note": "the server narrows by component, and events by time range"},
     Feature.SEARCH_TIME_RANGE: E,
     Feature.SEARCH_TEXT: E,
     Feature.CHANGES: {"level": E, "method": "etag-listing"},
@@ -121,6 +121,24 @@ def _changes(features: Any) -> dict[str, Any]:
     return {"level": E, "method": "etag-listing"}
 
 
+def _time_range(features: Any) -> dict[str, Any]:
+    """Events only, and only where the server matches recurrences and open ranges as RFC 4791 says.
+
+    Tasks are always filtered client-side: RFC 4791 §9.9's rules for a
+    ``VTODO`` are where servers disagree most, and an under-match loses data.
+    """
+    needed = (
+        "search.time-range.event",
+        "search.time-range.accurate",
+        "search.time-range.open.start",
+        "search.time-range.open.end",
+        "search.recurrences.includes-implicit.event",
+    )
+    if all(_level(features, name) is F for name in needed):
+        return {"level": E, "components": ["VEVENT"]}
+    return {"level": E, "components": []}
+
+
 def backend_capabilities(features: Any) -> Capabilities:
     return Capabilities({f: v for f, v in _table(features).items() if f in BACKEND_FEATURES})
 
@@ -129,6 +147,7 @@ def collection_capabilities(features: Any, components: frozenset[Component]) -> 
     """The server's table, narrowed to what the calendar says it holds."""
     table = {f: v for f, v in _table(features).items() if f not in BACKEND_FEATURES}
     table[Feature.CHANGES] = _changes(features)
+    table[Feature.SEARCH_TIME_RANGE] = _time_range(features)
     for kind, (feature, name) in COMPONENT_FROM_SERVER.items():
         table[feature] = _level(features, name) if kind in components else U
     return Capabilities({f: Capability.coerce(v) for f, v in table.items()})

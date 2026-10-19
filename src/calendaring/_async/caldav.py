@@ -71,16 +71,28 @@ class AsyncCalDAVCollection(AsyncCollection):
         return StoredObject(_name_of(obj.url), obj.etag, _parse(wire), wire, obj)
 
     async def _query(self, searcher: Searcher | None) -> list[StoredObject]:
-        # Everything of each kind the calendar holds: the generic layer filters (A3).
+        """Each kind the search can match, narrowed on the server only where that cannot under-match (A3)."""
         found: dict[str, StoredObject] = {}
-        for kind in sorted(self.components, key=lambda c: c.value):
+        for kind in sorted(self._kinds(searcher), key=lambda c: c.value):
             flags: dict[str, Any] = {SEARCH_FLAG[kind]: True}
             if kind is Component.TASK:
                 flags["include_completed"] = True
+            # The range goes to caldav as given.  CalDAV takes a range in UTC only, so floating
+            # times, all-day events and naive bounds need a wider window; caldav asks the server
+            # for a day more on each side and filters the result itself.  Widening again here
+            # would cost requests and gain nothing: that is the backend's job, and it does it.
+            if searcher is not None and kind.value in self.capabilities.details(Feature.SEARCH_TIME_RANGE).get(
+                "components", ()
+            ):
+                flags.update({k: v for k, v in (("start", searcher.start), ("end", searcher.end)) if v is not None})
             for obj in await self._backend._dav.search(self.calendar, **flags):
                 stored = self._stored(obj)
                 found.setdefault(stored.native_id, stored)
         return list(found.values())
+
+    def _kinds(self, searcher: Searcher | None) -> frozenset[Component]:
+        wanted = {kind for kind, flag in SEARCH_FLAG.items() if searcher is not None and getattr(searcher, flag, None)}
+        return self.components & wanted if wanted else self.components
 
     async def _fetch(self, native_id: str) -> StoredObject:
         for obj in await self._backend._dav.multiget(self.calendar, [self._href(native_id)]):
