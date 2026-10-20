@@ -541,11 +541,12 @@ untouched (a conformance test proposed in [prior art Part 2](PRIOR_ART_AND_DECIS
 `wire` holds the stored object exactly as the backend returned it when the
 item was read: the body of a CalDAV `GET`, the `calendar-data` of a
 `calendar-query` or `calendar-multiget` response, the content of a vdir
-file. On CalDAV that means the raw response body, which `caldav` does not
-keep today: it runs incoming data through `vcal.fix()`, and its
-`wire_data` re-encodes that normalised copy. The CalDAV backend has to
-capture the body itself, or wait for `caldav` to keep it
-([caldav issue 763](https://github.com/python-caldav/caldav/issues/763)). It belongs to `etag`, and like `etag` it is a snapshot: an edit to
+file. On CalDAV it is `caldav`'s `raw_data` (caldav 3.6,
+[caldav issue 763](https://github.com/python-caldav/caldav/issues/763)),
+taken before `vcal.fix()` normalises the data: a `GET` body byte for
+byte, and from a `REPORT` the text of the `calendar-data` element, which
+the XML parser has already decoded (entities, and CRLF turned into LF).
+It belongs to `etag`, and like `etag` it is a snapshot: an edit to
 `component` does not change it, and a write sets it to `None`, because
 what the server stores may differ from what was sent (see "The content
 after a write" in [§2.3](#23-collection)); `reload()` reads it again.
@@ -1058,7 +1059,7 @@ initial set:
 | `search.server-side`, `search.time-range`, `search.text` | how much the server filters; never affects results ([§4 Search](#4-search)) |
 | `changes` | `changes()`: `FULL` with a native token, `EMULATED` by listing |
 | `changes.known` | `changes(known=...)` fetches only what changed: `FULL` where etags can be listed without content (CalDAV, vdir), `EMULATED` where everything is read and compared (JMAP, single `.ics` file, feed, Gitea) |
-| `write.wire` | `add(wire=...)`, `save(wire=...)`: given bytes are sent as they are; `FULL` on vdir, and on CalDAV once caldav sends given bytes unchanged ([caldav #763](https://github.com/python-caldav/caldav/issues/763)); `UNSUPPORTED` elsewhere |
+| `write.wire` | `add(wire=...)`, `save(wire=...)`: given bytes are sent as they are; `FULL` on vdir, and on CalDAV through caldav's `save(raw_data=...)` (caldav 3.6, [caldav #763](https://github.com/python-caldav/caldav/issues/763)); `UNSUPPORTED` elsewhere |
 | `write.conditional` | `FULL` with an atomic precondition (ETag, `content_version`); `EMULATED` read-compare-write |
 | `identity.client-uid`, `identity.foreign-id` | [§3.2 Identity](#32-identity) |
 | `identity.client-native-id` | `add(native_id=...)`: the caller may name the stored object (CalDAV href, vdir file name) |
@@ -1381,8 +1382,8 @@ not a live handle.
 
 The other direction also works: `collection.wrap(native_item)` turns a
 backend object (a `caldav.Todo`, say) into this library's item, bound to
-that collection, without I/O; `wire` stays `None` for a `caldav` object,
-whose `wire_data` is its normalised copy rather than the server's bytes
+that collection, without I/O; for a `caldav` object `wire` is its
+`raw_data`, `None` if it was not read from the server
 (see "The stored form" in [§3.1](#31-the-base-a-typed-view-over-icalendar)). Together with `.native` that lets code use both libraries side by side,
 which is what a migration needs
 ([§9 Migrating from caldav](#9-migrating-from-caldav)).

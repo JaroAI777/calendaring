@@ -12,6 +12,8 @@ client is of the wrong mode.  What both modes share lives here.
 Writes go through caldav's own ``save()`` and ``delete()``: ``save(no_overwrite=True)``
 sends ``If-None-Match: *`` where the server honours it (caldav 3.6), and an
 update carries the ETag it was read with.  ``SEQUENCE`` is left as given.
+``wire=`` bytes go as ``save(raw_data=...)``, which caldav sends unchanged;
+``wire`` on a read is caldav's ``raw_data``, what the server sent.
 """
 
 from __future__ import annotations
@@ -129,6 +131,11 @@ def _resource(
     props = {} if etag is None else {GetEtag.tag: etag}
     cls = RESOURCE.get(kind or "", CalendarObjectResource)
     return cls(client=client, url=url, data=None if data is None else data.decode(), parent=calendar, props=props)
+
+
+def _raw(data: bytes, raw: bool) -> dict[str, Any]:
+    """``save()``'s argument for sending ``data`` as it is (caldav 3.6, caldav #763); left out otherwise."""
+    return {"raw_data": data} if raw else {}
 
 
 def _strong(etag: str | None) -> str | None:

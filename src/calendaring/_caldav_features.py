@@ -58,7 +58,6 @@ FIXED: dict[Feature, Any] = {
     Feature.SEARCH_TEXT: E,
     Feature.CHANGES: {"level": E, "method": "etag-listing"},
     Feature.MOVE: {"level": E, "note": "added to the target, then deleted here"},
-    Feature.WRITE_WIRE: {"level": U, "note": "caldav re-serialises what it saves (caldav #763)"},
     Feature.IDENTITY_FOREIGN_ID: {"level": U, "note": "the UID is native"},
     Feature.RECURRENCE_EDIT_OCCURRENCE: {"level": U, "note": _PENDING},
     Feature.RECURRENCE_EDIT_THIS_AND_FUTURE: U,

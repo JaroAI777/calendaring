@@ -67,9 +67,10 @@ class AsyncCalDAVCollection(AsyncCollection):
         return self.url + quote(native_id, safe="")
 
     def _stored(self, obj: Any) -> StoredObject:
+        # raw_data is what the server sent; data is what caldav made of it, which is what gets parsed.
         data = obj.data
-        wire = data.encode() if isinstance(data, str) else bytes(data)
-        return StoredObject(_name_of(obj.url), obj.etag, _parse(wire), wire, obj)
+        parsed = _parse(data.encode() if isinstance(data, str) else bytes(data))
+        return StoredObject(_name_of(obj.url), obj.etag, parsed, obj.raw_data, obj)
 
     async def _query(self, searcher: Searcher | None) -> list[StoredObject]:
         """Each kind the search can match, narrowed on the server only where that cannot under-match (A3)."""
@@ -156,12 +157,14 @@ class AsyncCalDAVCollection(AsyncCollection):
         return self._stored(await self._backend._dav.by_uid(self.calendar, uid))
 
     async def _create(self, calendar: icalendar.Calendar, *, native_id: str | None, wire: bytes | None) -> StoredObject:
-        data = calendar.to_ical()  # wire= is refused before this: write.wire is UNSUPPORTED
+        data = wire if wire is not None else calendar.to_ical()
         first = _items_of(calendar)[0]
         uid = str(first.get("UID", ""))
         name = native_id or (f"{uid}.ics" if SAFE_NAME.match(uid) else f"{uuid.uuid4()}.ics")
         try:
-            etag = await self._backend._dav.create(self.calendar, self._href(name), data, str(first.name))
+            etag = await self._backend._dav.create(
+                self.calendar, self._href(name), data, str(first.name), raw=wire is not None
+            )
         except AlreadyExistsError as exc:
             if native_id is None:
                 exc.taken = "uid"  # the name was derived from the UID
@@ -184,9 +187,11 @@ class AsyncCalDAVCollection(AsyncCollection):
         self, native_id: str, calendar: icalendar.Calendar, *, etag: str | None, wire: bytes | None
     ) -> StoredObject:
         etag = await self._unless_changed(native_id, etag)
-        data = calendar.to_ical()
+        data = wire if wire is not None else calendar.to_ical()
         kind = str(_items_of(calendar)[0].name)
-        new_etag = await self._backend._dav.update(self.calendar, self._href(native_id), data, kind, etag)
+        new_etag = await self._backend._dav.update(
+            self.calendar, self._href(native_id), data, kind, etag, raw=wire is not None
+        )
         if new_etag is None:
             return await self._fetch(native_id)
         return StoredObject(native_id, new_etag, _parse(data))

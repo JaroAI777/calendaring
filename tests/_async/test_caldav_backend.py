@@ -18,6 +18,7 @@ from calendaring import (
     ConflictError,
     NotFoundError,
     SyncTokenError,
+    Task,
 )
 
 pytest.importorskip("caldav")
@@ -75,6 +76,28 @@ async def test_a_token_is_bearer_auth() -> None:
 async def test_an_option_caldav_does_not_take_is_a_configuration_error() -> None:
     with pytest.raises(ConfigurationError, match="no_such_option"):
         await AsyncBackend.open("https://dav.example.com/", kind="caldav", no_such_option=1)
+
+
+async def test_wire_bytes_are_sent_as_given(collection: AsyncCollection, monkeypatch: pytest.MonkeyPatch) -> None:
+    # icalendar would fold this line.  Xandikos refolds what it stores, so what is checked is the PUT.
+    client = collection._backend._dav.client  # type: ignore[attr-defined]
+    put = client.put
+    sent: list[bytes] = []
+
+    async def spy(url: str, body: bytes, headers: Any = None) -> Any:
+        sent.append(bytes(body))
+        return await put(url, body, headers)
+
+    monkeypatch.setattr(client, "put", spy)
+    data = Task.new(summary="placeholder")
+    payload = data.to_ical().replace(b"SUMMARY:placeholder", b"SUMMARY:" + b"x" * 100)
+    written = await collection.add(data, wire=payload)
+    written = await collection.save(written, wire=payload.replace(b"SUMMARY:", b"SUMMARY;X-SAVED=1:"))
+    assert sent == [payload, payload.replace(b"SUMMARY:", b"SUMMARY;X-SAVED=1:")]
+    assert written.native_id is not None
+    reread = await collection.get_by_native_id(written.native_id)
+    assert reread.wire is not None
+    assert Task.from_ical(reread.wire) == reread
 
 
 def weakened(collection: AsyncCollection, monkeypatch: pytest.MonkeyPatch) -> None:

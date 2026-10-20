@@ -15,6 +15,7 @@ from .._caldav_io import (
     SyncResult,
     _awaited,
     _etags,
+    _raw,
     _resource,
     _strong,
     _sync_result,
@@ -91,18 +92,27 @@ class AsyncDAV:
             found = calendar.get_objects_by_sync_token(token, load_objects=False, disable_fallback=True)
             return _sync_result(await _awaited(found))
 
-    async def create(self, calendar: Calendar, url: str, data: bytes, kind: str) -> str | None:
-        """Store a new object at ``url``: ``AlreadyExistsError`` if the name or the UID is taken.  Its ETag, if strong."""
+    async def create(self, calendar: Calendar, url: str, data: bytes, kind: str, *, raw: bool = False) -> str | None:
+        """Store a new object at ``url``: ``AlreadyExistsError`` if the name or the UID is taken.  Its ETag, if strong.
+
+        With ``raw``, ``data`` is sent byte for byte, not re-serialised by caldav.
+        """
         obj = _resource(self.client, calendar, url, data, kind)
         with translated(), creating():
-            await _awaited(obj.save(no_overwrite=True, increase_seqno=False, only_this_recurrence=False))
+            await _awaited(
+                obj.save(no_overwrite=True, increase_seqno=False, only_this_recurrence=False, **_raw(data, raw))
+            )
         return _strong(obj.etag)
 
-    async def update(self, calendar: Calendar, url: str, data: bytes, kind: str, etag: str | None) -> str | None:
+    async def update(
+        self, calendar: Calendar, url: str, data: bytes, kind: str, etag: str | None, *, raw: bool = False
+    ) -> str | None:
         """Replace the object at ``url``, if it still has ``etag`` (any version without one).  Its new ETag, if strong."""
         obj = _resource(self.client, calendar, url, data, kind, etag)
         with translated():
-            await _awaited(obj.save(increase_seqno=False, only_this_recurrence=False, precondition="etag"))
+            await _awaited(
+                obj.save(increase_seqno=False, only_this_recurrence=False, precondition="etag", **_raw(data, raw))
+            )
         return _strong(obj.etag)
 
     async def delete(self, calendar: Calendar, url: str, etag: str | None) -> None:
