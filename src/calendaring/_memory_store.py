@@ -8,6 +8,7 @@ the stored form (``wire``) and take writes of given bytes.
 from __future__ import annotations
 
 import itertools
+import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -223,6 +224,7 @@ class MemoryStore:
         self.profile = profile
         self.calendars: dict[str, MemoryCalendar] = {}
         self._counter = itertools.count(1)
+        self.instance = uuid.uuid4().hex  # what tells two stores apart, as a URL tells servers apart
         # Properties to drop on every write without saying so, like a server
         # that declares UNKNOWN and loses them: for testing verify=True.
         self.silently_drop = frozenset(silently_drop)

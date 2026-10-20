@@ -15,7 +15,7 @@ import copy
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Generator, Iterable, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, overload
 
@@ -25,7 +25,14 @@ from icalendar_searcher import Searcher
 
 from .._mapping import Change, differences, plan_losses
 from ..capabilities import BACKEND_FEATURES, Capabilities, Feature, Support
-from ..errors import CalendaringError, NotFoundError, SyncTokenError, UnsupportedError, VerificationError
+from ..errors import (
+    CalendaringError,
+    ConflictError,
+    NotFoundError,
+    SyncTokenError,
+    UnsupportedError,
+    VerificationError,
+)
 from ..items import Event, Item, Journal, Task, _items_of, _parse, split_stored
 from ..loss import RAISE, LossPolicy
 from ..types import ChangeSet, Component, Scope, StoredObject, SyncToken
@@ -216,8 +223,18 @@ class Collection(ABC):
                 return bool(setting)
         return False
 
+    def _token_scope(self) -> str:
+        """What an emulated token is bound to: by default the backend's kind and id, and the collection's id.
+
+        The backend id is the caller's label for it, so two configurations
+        that give different stores the same id accept each other's tokens,
+        and renaming a backend invalidates its tokens.  A backend that has a
+        locator (a directory, a URL) overrides this with it.
+        """
+        return f"{self._backend.kind}:{self.backend_id}:{self.id}"
+
     def _encode_token(self, etags: Mapping[str, str]) -> SyncToken:
-        raw = json.dumps({"collection": self.id, "etags": etags}, sort_keys=True).encode()
+        raw = json.dumps({"collection": self._token_scope(), "etags": etags}, sort_keys=True).encode()
         return SyncToken(base64.urlsafe_b64encode(raw).decode())
 
     def _decode_token(self, token: SyncToken) -> dict[str, str]:
@@ -227,7 +244,7 @@ class Collection(ABC):
             issued_by = data["collection"]
         except (binascii.Error, ValueError, TypeError, KeyError) as exc:
             raise SyncTokenError(f"not a token this collection issued: {token!r}") from exc
-        if issued_by != self.id or not isinstance(etags, dict):
+        if issued_by != self._token_scope() or not isinstance(etags, dict):
             raise SyncTokenError(f"a token from another collection: {issued_by!r}")
         return etags
 
@@ -701,8 +718,15 @@ class Collection(ABC):
                 stored = self._move(item, target)
                 if stored is not None:
                     return target._one(stored, written=True)
+            if item.etag is not None and (self._fetch(item.native_id)).etag != item.etag:
+                raise ConflictError(f"{item.native_id!r} changed since it was read")
             moved = target.add(item.as_data(), loss=loss, verify=verify)
-            self.delete(item)
+            try:
+                self.delete(item)
+            except ConflictError:
+                with suppress(CalendaringError):  # best effort: the conflict is what to report
+                    target.delete(moved, overwrite=True)
+                raise
             return moved
 
     # === binding, no I/O ===============================================

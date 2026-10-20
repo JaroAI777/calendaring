@@ -56,6 +56,9 @@ class MemoryCollection(Collection):
     def _list_etags(self) -> dict[str, str]:
         return {o.native_id: o.etag for o in self.store.objects.values()}
 
+    def _token_scope(self) -> str:
+        return f"memory:{self._backend.store.instance}:{self.id}"
+
     def _create(self, calendar: icalendar.Calendar, *, native_id: str | None, wire: bytes | None) -> StoredObject:
         data = self._backend.store.drop(wire if wire is not None else calendar.to_ical())
         obj = self.store.create(data, native_id=native_id, assign_uid=self._backend.store.assign_uid)

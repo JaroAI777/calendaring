@@ -788,6 +788,20 @@ class AsyncConformance:
         with pytest.raises(SyncTokenError):
             await collection.changes(SyncToken("conformance-not-a-token"))
 
+    async def test_a_token_from_another_collection_raises(
+        self, backend: AsyncBackend, collection: AsyncCollection
+    ) -> None:
+        if level(collection, Feature.CHANGES) is Support.UNSUPPORTED:
+            return  # test_a_bad_token_raises checked that changes() raises
+        if not backend.capabilities.supports(Feature.CREATE_COLLECTION):
+            pytest.skip("a second collection is needed, and the backend cannot make one")
+        other = await self.open_collection(backend, "conformance-other")
+        if level(other, Feature.CHANGES) is Support.UNSUPPORTED:
+            pytest.skip("the second collection has no change feed")
+        token = (await other.changes()).token
+        with pytest.raises(SyncTokenError):
+            await collection.changes(token)
+
     # === moving =======================================================
 
     async def test_move(self, backend: AsyncBackend, collection: AsyncCollection) -> None:

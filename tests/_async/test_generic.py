@@ -14,12 +14,14 @@ from calendaring import (
     AsyncWorkspace,
     BackendError,
     ConfigurationError,
+    ConflictError,
     Event,
     Feature,
     LossyWriteWarning,
     MultiResult,
     NotFoundError,
     Support,
+    SyncTokenError,
     Task,
     UnsupportedError,
     VerificationError,
@@ -193,3 +195,66 @@ async def test_workspace_defaults_stay_the_workspace_s() -> None:
     assert backend.verify is None, "the backend's own setting is untouched"
     with pytest.raises(VerificationError):
         await (await backend.collection("default")).add_task(summary="x", categories=["a"])
+
+
+async def test_move_between_backends_checks_the_etag_before_copying() -> None:
+    source = await AsyncMemoryBackend(id="source").collection("default")
+    target = await AsyncMemoryBackend(TRACKER, id="tracker").collection("default")
+    task = await source.add_task(summary="file taxes")
+    other = await source.get(task.uid)
+    other.component["SUMMARY"] = "file taxes (by 31 Oct)"
+    await other.save()
+    for _ in range(2):
+        with pytest.raises(ConflictError):
+            await source.move(task, target)
+    assert await target.search() == [], "a move refused for a stale etag left a copy behind"
+
+
+class LosesTheRace(AsyncMemoryCollection):
+    """Another client edits the item between the copy and the delete."""
+
+    async def _delete(self, native_id: str, *, etag: str | None) -> None:
+        raise ConflictError(f"{native_id!r} changed since it was read")
+
+
+async def test_a_move_that_loses_the_race_removes_its_copy() -> None:
+    class Backend(AsyncMemoryBackend):
+        collection_class = LosesTheRace
+
+    source = await Backend(id="source").collection("default")
+    target = await AsyncMemoryBackend(id="target").collection("default")
+    task = await source.add_task(summary="x")
+    with pytest.raises(ConflictError):
+        await source.move(task, target)
+    assert await target.search() == []
+
+
+async def test_a_token_from_another_backend_is_refused() -> None:
+    work = await AsyncMemoryBackend(id="work").collection("default")
+    home = await AsyncMemoryBackend(id="home").collection("default")
+    for summary in ("w1", "w2"):
+        await work.add_task(summary=summary)
+    token = (await work.changes()).token
+    with pytest.raises(SyncTokenError):
+        await home.changes(token)
+    twin = await AsyncMemoryBackend(id="work").collection("default")
+    with pytest.raises(SyncTokenError):
+        await twin.changes(token)
+
+
+class DefaultTokenScope(AsyncMemoryCollection):
+    def _token_scope(self) -> str:
+        return AsyncCollection._token_scope(self)
+
+
+async def test_the_default_token_scope_is_kind_backend_and_collection() -> None:
+    class Backend(AsyncMemoryBackend):
+        collection_class = DefaultTokenScope
+
+    work = await Backend(id="work").collection("default")
+    assert work._token_scope() == "memory:work:default"
+    token = (await work.changes()).token
+    with pytest.raises(SyncTokenError):
+        await (await Backend(id="home").collection("default")).changes(token)
+    # Another store under the same label: the default cannot tell them apart.
+    await (await Backend(id="work").collection("default")).changes(token)

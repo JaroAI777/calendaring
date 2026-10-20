@@ -14,12 +14,14 @@ from calendaring import (
     Workspace,
     BackendError,
     ConfigurationError,
+    ConflictError,
     Event,
     Feature,
     LossyWriteWarning,
     MultiResult,
     NotFoundError,
     Support,
+    SyncTokenError,
     Task,
     UnsupportedError,
     VerificationError,
@@ -193,3 +195,66 @@ def test_workspace_defaults_stay_the_workspace_s() -> None:
     assert backend.verify is None, "the backend's own setting is untouched"
     with pytest.raises(VerificationError):
         (backend.collection("default")).add_task(summary="x", categories=["a"])
+
+
+def test_move_between_backends_checks_the_etag_before_copying() -> None:
+    source = MemoryBackend(id="source").collection("default")
+    target = MemoryBackend(TRACKER, id="tracker").collection("default")
+    task = source.add_task(summary="file taxes")
+    other = source.get(task.uid)
+    other.component["SUMMARY"] = "file taxes (by 31 Oct)"
+    other.save()
+    for _ in range(2):
+        with pytest.raises(ConflictError):
+            source.move(task, target)
+    assert target.search() == [], "a move refused for a stale etag left a copy behind"
+
+
+class LosesTheRace(MemoryCollection):
+    """Another client edits the item between the copy and the delete."""
+
+    def _delete(self, native_id: str, *, etag: str | None) -> None:
+        raise ConflictError(f"{native_id!r} changed since it was read")
+
+
+def test_a_move_that_loses_the_race_removes_its_copy() -> None:
+    class Backend(MemoryBackend):
+        collection_class = LosesTheRace
+
+    source = Backend(id="source").collection("default")
+    target = MemoryBackend(id="target").collection("default")
+    task = source.add_task(summary="x")
+    with pytest.raises(ConflictError):
+        source.move(task, target)
+    assert target.search() == []
+
+
+def test_a_token_from_another_backend_is_refused() -> None:
+    work = MemoryBackend(id="work").collection("default")
+    home = MemoryBackend(id="home").collection("default")
+    for summary in ("w1", "w2"):
+        work.add_task(summary=summary)
+    token = (work.changes()).token
+    with pytest.raises(SyncTokenError):
+        home.changes(token)
+    twin = MemoryBackend(id="work").collection("default")
+    with pytest.raises(SyncTokenError):
+        twin.changes(token)
+
+
+class DefaultTokenScope(MemoryCollection):
+    def _token_scope(self) -> str:
+        return Collection._token_scope(self)
+
+
+def test_the_default_token_scope_is_kind_backend_and_collection() -> None:
+    class Backend(MemoryBackend):
+        collection_class = DefaultTokenScope
+
+    work = Backend(id="work").collection("default")
+    assert work._token_scope() == "memory:work:default"
+    token = (work.changes()).token
+    with pytest.raises(SyncTokenError):
+        (Backend(id="home").collection("default")).changes(token)
+    # Another store under the same label: the default cannot tell them apart.
+    (Backend(id="work").collection("default")).changes(token)
