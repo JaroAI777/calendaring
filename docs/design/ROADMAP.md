@@ -471,8 +471,8 @@ therefore must not be trimmed, and it must land before `plann` reaches its Phase
 - [ ] Aggregation primitives sufficient for `plann`'s `sum_hours` — grouping a
       selection into budget lines with per-line subtotals, keeping committed and
       spent time separate
-- [ ] Coordinate the design with `plann` before freezing it; a review from its
-      author is cheap now and expensive after 1.0
+- [ ] Coordinate the design with `plann` before freezing it; a review of how
+      the design affects `plann` is cheap now and expensive after 1.0
 
 ---
 
