@@ -13,9 +13,23 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import pytest
+from icalendar_searcher import Searcher
+
 from calendaring import Backend, Collection, SyncItem, Item, Task
-from calendaring.memory import FEED, FULL, MINIMAL, TRACKER, MemoryBackend, MemoryStore, Profile
+from calendaring.memory import (
+    FEED,
+    FULL,
+    MINIMAL,
+    TRACKER,
+    MemoryBackend,
+    MemoryCollection,
+    MemoryObject,
+    MemoryStore,
+    Profile,
+)
 from calendaring.testing import SyncConformance
+from calendaring.types import StoredObject
 
 
 class TestFullProfile(SyncConformance):
@@ -100,3 +114,26 @@ class TestTidyingUp:
             suite.tidy_up(backend)
         assert sorted(store.calendars) == ["conformance", "conformance-new", "default"]
         assert [len(c.objects) for c in store.calendars.values()] == [0, 0, 0]
+
+
+class FirstPageOnly(MemoryCollection):
+    """Lists through a paged API and never asks for the second page."""
+
+    def _page(self) -> list[MemoryObject]:
+        return list(self.store.objects.values())[:50]
+
+    def _query(self, searcher: Searcher | None) -> list[StoredObject]:
+        return [StoredObject(o.native_id, o.etag, o.calendar, o.data, o) for o in self._page()]
+
+    def _list_etags(self) -> dict[str, str]:
+        return {o.native_id: o.etag for o in self._page()}
+
+
+def test_the_suite_catches_a_backend_that_reads_one_page() -> None:
+    class Backend(MemoryBackend):
+        collection_class = FirstPageOnly
+
+    suite = TestFullProfile()
+    suite._made, suite._borrowed = [], []
+    with pytest.raises(AssertionError):
+        suite.test_listings_are_not_cut_at_a_page(Backend(profile=FULL).collection("default"))

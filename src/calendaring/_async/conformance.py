@@ -174,6 +174,10 @@ class AsyncConformance:
     # Non-CalDAV backends are code, not servers, and must not declare UNKNOWN (§5.1).
     allow_unknown: bool = False
 
+    # How many objects the paging test stores: more than a page of the APIs
+    # backends list through (a JMAP /query limit, an issue tracker's list).
+    page_size_hint: int = 120
+
     # --- hooks a backend's test module may override --------------------
 
     async def open_backend(self) -> AsyncBackend:
@@ -673,6 +677,30 @@ class AsyncConformance:
         listed = await collection.search()
         iterated = [i async for i in collection.iter_search()]
         assert sorted(key(i) for i in iterated) == sorted(key(i) for i in listed)
+
+    async def test_listings_are_not_cut_at_a_page(self, collection: AsyncCollection) -> None:
+        kind = next(k for k in KINDS if holds(collection, k))
+        new = KINDS[kind][0].new
+        seeded = await self.seed(collection, [new(summary=f"paged {n}") for n in range(self.page_size_hint)])
+        mine = {nid(i) for i in seeded}
+        assert {nid(i) for i in stored_by(await collection.search(), seeded)} == mine
+        assert {nid(i) async for i in collection.iter_search() if i.native_id in mine} == mine
+        last = seeded[-1]
+        assert (await collection.get(last.uid)).native_id == last.native_id
+        if level(collection, Feature.CHANGES) is Support.UNSUPPORTED:
+            return
+        full = await collection.changes()
+        assert mine <= {nid(i) for i in full.changed}
+        if level(collection, Feature.CHANGES_KNOWN) is not Support.UNSUPPORTED:
+            known = await collection.changes(known={nid(i): str(i.etag) for i in seeded})
+            assert known.deleted == []
+            assert not mine & {nid(i) for i in known.changed}
+        if writable(collection):
+            last.component["SUMMARY"] = "paged, changed"
+            await last.save()
+            since = await collection.changes(full.token)
+            assert nid(last) in {nid(i) for i in since.changed}
+            assert since.deleted == []
 
     async def test_search_sorts(self, collection: AsyncCollection) -> None:
         searcher = Searcher(todo=True)

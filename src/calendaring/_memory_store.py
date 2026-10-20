@@ -11,6 +11,7 @@ import itertools
 import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Any
 
 import icalendar
@@ -156,7 +157,7 @@ class MemoryObject:
     def calendar(self) -> icalendar.Calendar:
         return _parse(self.data)
 
-    @property
+    @cached_property  # every add compares it with every stored object's
     def uid(self) -> str:
         return str(_items_of(self.calendar)[0]["UID"])
 
