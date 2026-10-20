@@ -38,7 +38,8 @@ import icalendar
 import pytest
 from icalendar_searcher import Searcher
 
-from .._mapping import property_lines
+from .._corpus import CORPUS
+from .._mapping import differences, property_lines
 from ..capabilities import BACKEND_FEATURES, Feature, Support
 from ..errors import (
     AlreadyExistsError,
@@ -177,6 +178,7 @@ def searchers() -> dict[str, Callable[[], Searcher]]:
         "tasks": lambda: Searcher(todo=True),
         "open-tasks": lambda: Searcher(todo=True, include_completed=False),
         "events-in-range": lambda: Searcher(event=True, start=at(2), end=at(4)),
+        "tasks-in-range": lambda: Searcher(todo=True, start=at(2), end=at(4)),
         "events-expanded": lambda: Searcher(event=True, start=at(2), end=at(4), expand=True),
         "journals": lambda: Searcher(journal=True),
         "categories": categories,
@@ -195,11 +197,14 @@ def dataset() -> list[Item]:
     alarm.add("TRIGGER", timedelta(minutes=-30))
     e1.component.add_component(alarm)
     t = Event.new(summary="T: Training session", start=at(10, 18), end=at(10, 19))
+    s = Event.new(summary="S: overnight", start=at(1, 20), end=at(2, 14))  # began before the range
+    ts = Task.new(summary="TS: start only", start=at(3))
+    tb = Task.new(summary="TB: spans the range", start=at(1), end=at(5))
     e2 = Event.new(summary="E2: later", start=at(20, 10), end=at(20, 11))
     r = Event.new(summary="R: daily", start=at(1, 9), end=at(1, 10))
     r.component.add("RRULE", {"FREQ": "DAILY", "COUNT": 5})
     j = Journal.new(summary="J: notes", start=at(2))
-    return [a, b, c, e1, e2, t, r, j]
+    return [a, b, c, ts, tb, e1, e2, t, s, r, j]
 
 
 class AsyncConformance:
@@ -738,6 +743,26 @@ class AsyncConformance:
         assert [[loss.property for loss in losses] for losses in seen] == [[name]]
         assert seen[0][0].sent == outside[0]
 
+    @pytest.mark.parametrize("name", list(CORPUS))
+    async def test_real_world_objects_round_trip(self, collection: AsyncCollection, name: str) -> None:
+        """Only what the declaration says may be lost: verify compares the stored object with what was sent."""
+        run = f"-{uuid.uuid4().hex[:12]}@conformance.invalid".encode()  # a crashed run may leave one behind
+        item = Item.from_ical(CORPUS[name].replace(b"@conformance.invalid", run))
+        kind = Component(item.component.name)
+        if not holds(collection, kind):
+            pytest.skip(f"the collection holds no {kind.value}")
+        if writable(collection):
+            read = await collection.reload(await collection.add(item, loss=ALLOW, verify=True))
+        else:
+            [seeded] = await self.seed(collection, [item])
+            read = await collection.reload(seeded)
+            assert differences(item.icalendar, read.icalendar) == []
+        zones = {tz["TZID"] for tz in read.icalendar.walk("VTIMEZONE")}
+        for component in read.icalendar.walk():
+            for prop in component.property_items(recursive=False):
+                tzid = getattr(prop[1], "params", {}).get("TZID")
+                assert tzid is None or tzid in zones, f"{prop[0]} uses TZID {tzid}, which has no VTIMEZONE"
+
     async def test_verify_passes_on_an_honest_write(self, collection: AsyncCollection) -> None:
         stored = await self.add_task(collection, summary="verified", description="checked after writing")
         stored.component["SUMMARY"] = "verified again"
@@ -870,9 +895,15 @@ class AsyncConformance:
         if level(collection, Feature.TASK_COMPLETE_RECURRING) is Support.UNSUPPORTED:
             await self.assert_unsupported(collection, Feature.TASK_COMPLETE_RECURRING, lambda: task.complete())
             return
+        etag = task.etag
         await task.complete()
         read = await collection.reload(task)
         assert str(read.component.get("STATUS", "")) != "COMPLETED", "completing one occurrence ended the series"
+        # "safe" mode (§2.3): a completed copy of the occurrence, and the master's DTSTART moved on.
+        assert read.etag != etag, "complete() on a recurring task wrote nothing"
+        assert read.component.decoded("DTSTART") > at(1), "the master's DTSTART did not move"
+        done = [t for t in await collection.tasks() if str(t.component.get("STATUS", "")) == "COMPLETED"]
+        assert any(str(t.component["SUMMARY"]) == "weekly" for t in done), "no completed copy of the occurrence"
 
     # === recurrence ===================================================
 

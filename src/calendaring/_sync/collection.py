@@ -23,7 +23,7 @@ import icalendar
 import recurring_ical_events
 from icalendar_searcher import Searcher
 
-from .._mapping import Change, differences, plan_losses
+from .._mapping import Change, differences, plan_calendar_losses, plan_losses
 from ..capabilities import BACKEND_FEATURES, Capabilities, Feature, Support
 from ..errors import (
     CalendaringError,
@@ -313,6 +313,7 @@ class Collection(ABC):
         else:
             calendar = copy.deepcopy(item.icalendar)
         changes = [change for c in _items_of(calendar) for change in self._plan_losses(c)]
+        changes += plan_calendar_losses(calendar, self.capabilities)
         losses = [loss_ for loss_, _ in changes]
         if losses and wire is not None:
             raise UnsupportedError(Feature.WRITE_WIRE, "wire= bytes the backend cannot store as they are")

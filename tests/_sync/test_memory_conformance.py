@@ -14,6 +14,7 @@ from __future__ import annotations
 import copy
 import inspect
 from collections.abc import Iterator, Mapping, Sequence
+from datetime import UTC, date, datetime, time
 from typing import Any, ClassVar
 
 import icalendar
@@ -24,6 +25,7 @@ from calendaring import (
     Backend,
     Collection,
     SyncItem,
+    SyncTask,
     BrokenObject,
     Feature,
     Item,
@@ -31,8 +33,10 @@ from calendaring import (
     Support,
     SyncToken,
     Task,
+    VerificationError,
 )
 from calendaring._sync.conformance import snapshot
+from calendaring.loss import LossPolicy
 from calendaring.memory import (
     FEED,
     FULL,
@@ -40,6 +44,7 @@ from calendaring.memory import (
     TRACKER,
     MemoryBackend,
     MemoryCollection,
+    MemoryCalendar,
     MemoryObject,
     MemoryStore,
     Profile,
@@ -278,6 +283,109 @@ class LeakyChangeFeed(MemoryCollection):
         return [*changed, *others], deleted, new_token
 
 
+class Mangling(MemoryCollection):
+    """Stores a mangled copy of whatever it is given, declaring that it loses nothing."""
+
+    def mangle(self, component: icalendar.Component) -> None:
+        raise NotImplementedError
+
+    def _mangled(self, calendar: icalendar.Calendar, wire: bytes | None) -> icalendar.Calendar:
+        out = icalendar.Calendar.from_ical(wire) if wire is not None else copy.deepcopy(calendar)
+        for component in out.subcomponents:
+            if component.name in ("VEVENT", "VTODO", "VJOURNAL"):
+                self.mangle(component)
+        return out
+
+    def _create(self, calendar: icalendar.Calendar, *, native_id: str | None, wire: bytes | None) -> StoredObject:
+        return super()._create(self._mangled(calendar, wire), native_id=native_id, wire=None)
+
+
+class DropsAlarms(Mangling):
+    def mangle(self, component: icalendar.Component) -> None:
+        component.subcomponents[:] = [c for c in component.subcomponents if c.name != "VALARM"]
+
+
+class AsciiOnly(Mangling):
+    def mangle(self, component: icalendar.Component) -> None:
+        for name in ("SUMMARY", "DESCRIPTION", "LOCATION"):
+            if name in component:
+                text = "".join(ch if ord(ch) < 128 else "?" for ch in str(component.pop(name)))
+                component.add(name, text)
+
+
+class FlattensNewlines(Mangling):
+    def mangle(self, component: icalendar.Component) -> None:
+        if "DESCRIPTION" in component:
+            component["DESCRIPTION"] = icalendar.vText(str(component["DESCRIPTION"]).replace("\n", " "))
+
+
+class StoresUtc(Mangling):
+    def mangle(self, component: icalendar.Component) -> None:
+        for name in ("DTSTART", "DTEND"):
+            value = component.decoded(name, None)
+            if isinstance(value, datetime):
+                component.pop(name)
+                component.add(name, value.astimezone(UTC))
+
+
+class DatesAsDateTimes(Mangling):
+    def mangle(self, component: icalendar.Component) -> None:
+        for name in ("DTSTART", "DTEND", "DUE"):
+            value = component.decoded(name, None)
+            if isinstance(value, date) and not isinstance(value, datetime):
+                component.pop(name)
+                component.add(name, datetime.combine(value, time(), UTC))
+
+
+class DropsEventDetails(Mangling):
+    def mangle(self, component: icalendar.Component) -> None:
+        for name in ("LOCATION", "URL", "EXDATE", "X-CONFORMANCE-COLOUR"):
+            component.pop(name, None)
+
+
+class DropsOverrides(MemoryCollection):
+    def _create(self, calendar: icalendar.Calendar, *, native_id: str | None, wire: bytes | None) -> StoredObject:
+        calendar = copy.deepcopy(calendar)
+        calendar.subcomponents[:] = [c for c in calendar.subcomponents if "RECURRENCE-ID" not in c]
+        return super()._create(calendar, native_id=native_id, wire=None)
+
+
+class FirstValueOnly(Mangling):
+    def mangle(self, component: icalendar.Component) -> None:
+        for name in ("CATEGORIES", "ATTENDEE"):
+            values = component.get(name)
+            if isinstance(values, list):
+                component[name] = values[0]
+
+
+class StartsInRange(MemoryCollection):
+    """Narrows a time range by DTSTART alone, and leaves tasks out of it."""
+
+    def _query(self, searcher: Searcher | None) -> list[StoredObject]:
+        start, end = getattr(searcher, "start", None), getattr(searcher, "end", None)
+        out = []
+        for o in self.store.objects.values():
+            components = [c for c in o.calendar.subcomponents if c.name in ("VEVENT", "VTODO")]
+            if start is None or any(
+                c.name == "VEVENT" and start <= c.decoded("DTSTART") < end for c in components if "DTSTART" in c
+            ):
+                out.append(_listed(o))
+        return out
+
+
+class CompletesNothing(MemoryCollection):
+    """Declares task.complete-recurring and writes nothing."""
+
+    def __init__(self, backend: MemoryBackend, store: MemoryCalendar) -> None:
+        super().__init__(backend, store)
+        self.capabilities = self.capabilities.updated({Feature.TASK_COMPLETE_RECURRING: Support.FULL})
+
+    def _complete_recurring(
+        self, task: Task, at: datetime | None, mode: str, *, loss: LossPolicy | None, verify: bool | None
+    ) -> SyncTask:
+        return self.bind(task)
+
+
 # What the suite raises when it catches a defect: its own assertion, or a
 # pytest.raises that did not raise.  The round trip catches through verify=True.
 ASSERTS = (AssertionError, pytest.fail.Exception)
@@ -293,6 +401,25 @@ CAUGHT: list[tuple[type[MemoryCollection], str, dict[str, Any], Any]] = [
     (FrozenFeed, "test_read_paths_on_seeded_items", {}, ASSERTS),
     (NoDeletionsFeed, "test_read_paths_on_seeded_items", {}, ASSERTS),
     (LeakyChangeFeed, "test_changes_follow_a_move", {}, ASSERTS),
+    (DropsAlarms, "test_real_world_objects_round_trip", {"name": "event-series-in-a-time-zone"}, VerificationError),
+    (DropsAlarms, "test_real_world_objects_round_trip", {"name": "task-due-on-a-date"}, VerificationError),
+    (AsciiOnly, "test_real_world_objects_round_trip", {"name": "journal-entry"}, VerificationError),
+    (FlattensNewlines, "test_real_world_objects_round_trip", {"name": "task-due-on-a-date"}, VerificationError),
+    (StoresUtc, "test_real_world_objects_round_trip", {"name": "event-series-in-a-time-zone"}, VerificationError),
+    (StoresUtc, "test_real_world_objects_round_trip", {"name": "floating-event"}, VerificationError),
+    (DatesAsDateTimes, "test_real_world_objects_round_trip", {"name": "all-day-event-with-rdate"}, VerificationError),
+    (DatesAsDateTimes, "test_real_world_objects_round_trip", {"name": "task-due-on-a-date"}, VerificationError),
+    (
+        DropsEventDetails,
+        "test_real_world_objects_round_trip",
+        {"name": "event-series-in-a-time-zone"},
+        VerificationError,
+    ),
+    (DropsOverrides, "test_real_world_objects_round_trip", {"name": "event-series-in-a-time-zone"}, VerificationError),
+    (FirstValueOnly, "test_real_world_objects_round_trip", {"name": "task-due-on-a-date"}, VerificationError),
+    (StartsInRange, "test_search_gives_the_client_side_answer", {"name": "events-in-range"}, ASSERTS),
+    (StartsInRange, "test_search_gives_the_client_side_answer", {"name": "tasks-in-range"}, ASSERTS),
+    (CompletesNothing, "test_complete_a_recurring_task", {}, ASSERTS),
 ]
 
 

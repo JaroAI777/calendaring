@@ -1049,7 +1049,7 @@ initial set:
 | `identity.client-uid`, `identity.foreign-id` | [§3.2 Identity](#32-identity) |
 | `identity.client-native-id` | `add(native_id=...)`: the caller may name the stored object (CalDAV href, vdir file name) |
 | `properties.passthrough` | unknown properties and components survive a round trip |
-| `recurrence`, `recurrence.edit-this-and-future` | stores `RRULE`; [§3.7 Recurrence](#37-recurrence) |
+| `recurrence`, `recurrence.edit-this-and-future` | stores a recurrence set: `RRULE`, `RDATE`, `EXDATE` and the overrides (`RECURRENCE-ID`); `UNSUPPORTED` drops all four, overrides included; [§3.7 Recurrence](#37-recurrence) |
 | `recurrence.edit-occurrence` | `save(occurrence)` merges it into the stored object ([§3.7](#37-recurrence)); `UNSUPPORTED` where the merge is not available yet (Q3) |
 | `task.complete-recurring` | `complete()` on a recurring task or one occurrence of it ([§3.7](#37-recurrence)) |
 | `move` | [§2.3 Collection](#23-collection) |
@@ -1057,6 +1057,14 @@ initial set:
 | `task.start`, `task.due`, `task.completed`, `task.planned`, `task.estimate` | |
 | `task.relations.parent`, `task.relations.depends-on` | |
 | `categories`, `attendees` | for every component; on a task, attendees are its assignees |
+| `alarms` | `VALARM` components survive; `UNSUPPORTED` drops them |
+| `timezones` | a time with a `TZID` keeps it (with its `VTIMEZONE`), a floating time stays floating; `LOSSY` stores both in UTC, a floating time read as local time ([§4](#4-search)) |
+| `dates` | a `DATE` value stays a date; `LOSSY` stores midnight UTC |
+
+Text is not a feature: non-ASCII, escaped and multi-line text, and every
+value of a property with several, round-trip on every backend.  The
+conformance suite stores a corpus of real-world objects and lets `verify`
+compare what comes back; only what the declaration says may differ.
 
 Feature names are identifiers, not attribute paths: `task.due` means "stores a
 task's `DUE`", which is read as `task.component.DUE`, and `task.estimate`

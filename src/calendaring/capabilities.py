@@ -57,6 +57,9 @@ class Feature(StrEnum):
     TASK_RELATIONS_DEPENDS_ON = "task.relations.depends-on"
     CATEGORIES = "categories"
     ATTENDEES = "attendees"
+    ALARMS = "alarms"
+    TIMEZONES = "timezones"
+    DATES = "dates"
 
 
 # Declared on the backend rather than on a collection (§5.2).
