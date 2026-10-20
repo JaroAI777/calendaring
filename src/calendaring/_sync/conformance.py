@@ -146,7 +146,8 @@ PROPERTY_SAMPLES: dict[Feature, tuple[str, Any, dict[str, str]]] = {
     Feature.TASK_DUE: ("DUE", at(3), {}),
     Feature.TASK_COMPLETED: ("COMPLETED", at(2), {}),
     Feature.TASK_PLANNED: ("X-PYCAL-PLANNED-START", icalendar.vDDDTypes(at(2)), {}),
-    Feature.TASK_ESTIMATE: ("ESTIMATED-DURATION", timedelta(hours=2), {}),
+    # A bare timedelta would be written "2:00:00", which is not iCalendar.
+    Feature.TASK_ESTIMATE: ("ESTIMATED-DURATION", icalendar.vDuration(timedelta(hours=2)), {}),
     Feature.TASK_RELATIONS_PARENT: ("RELATED-TO", "conformance-parent", {"RELTYPE": "PARENT"}),
     Feature.TASK_RELATIONS_DEPENDS_ON: ("RELATED-TO", "conformance-dependency", {"RELTYPE": "DEPENDS-ON"}),
 }
