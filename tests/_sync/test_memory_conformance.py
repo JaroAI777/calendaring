@@ -16,7 +16,7 @@ from collections.abc import Sequence
 import pytest
 from icalendar_searcher import Searcher
 
-from calendaring import Backend, Collection, SyncItem, Item, Task
+from calendaring import Backend, Collection, SyncItem, Feature, Item, Support, Task
 from calendaring.memory import (
     FEED,
     FULL,
@@ -62,7 +62,10 @@ class TestMinimalProfile(SyncConformance):
 
 class TestFeedProfile(SyncConformance):
     def open_backend(self) -> Backend:
-        return MemoryBackend(profile=FEED)
+        backend = MemoryBackend(profile=FEED)
+        # A feed is read-only as a whole, which a backend may say as well (§5.2).
+        backend.capabilities = backend.capabilities.updated({Feature.WRITE: Support.UNSUPPORTED})
+        return backend
 
     def seed(self, collection: Collection, items: Sequence[Item]) -> list[SyncItem]:
         assert isinstance(collection, MemoryBackend.collection_class)
@@ -137,3 +140,10 @@ def test_the_suite_catches_a_backend_that_reads_one_page() -> None:
     suite._made, suite._borrowed = [], []
     with pytest.raises(AssertionError):
         suite.test_listings_are_not_cut_at_a_page(Backend(profile=FULL).collection("default"))
+
+
+def test_the_suite_catches_a_collection_wider_than_its_backend() -> None:
+    backend = MemoryBackend(profile=FULL)
+    backend.capabilities = backend.capabilities.updated({Feature.WRITE: Support.UNSUPPORTED})
+    with pytest.raises(AssertionError):
+        TestFullProfile().test_collection_never_widens_backend(backend, backend.collection("default"))

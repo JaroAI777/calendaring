@@ -16,7 +16,7 @@ from collections.abc import Sequence
 import pytest
 from icalendar_searcher import Searcher
 
-from calendaring import AsyncBackend, AsyncCollection, AsyncItem, Item, Task
+from calendaring import AsyncBackend, AsyncCollection, AsyncItem, Feature, Item, Support, Task
 from calendaring.memory import (
     FEED,
     FULL,
@@ -62,7 +62,10 @@ class TestMinimalProfile(AsyncConformance):
 
 class TestFeedProfile(AsyncConformance):
     async def open_backend(self) -> AsyncBackend:
-        return AsyncMemoryBackend(profile=FEED)
+        backend = AsyncMemoryBackend(profile=FEED)
+        # A feed is read-only as a whole, which a backend may say as well (§5.2).
+        backend.capabilities = backend.capabilities.updated({Feature.WRITE: Support.UNSUPPORTED})
+        return backend
 
     async def seed(self, collection: AsyncCollection, items: Sequence[Item]) -> list[AsyncItem]:
         assert isinstance(collection, AsyncMemoryBackend.collection_class)
@@ -137,3 +140,10 @@ async def test_the_suite_catches_a_backend_that_reads_one_page() -> None:
     suite._made, suite._borrowed = [], []
     with pytest.raises(AssertionError):
         await suite.test_listings_are_not_cut_at_a_page(await Backend(profile=FULL).collection("default"))
+
+
+async def test_the_suite_catches_a_collection_wider_than_its_backend() -> None:
+    backend = AsyncMemoryBackend(profile=FULL)
+    backend.capabilities = backend.capabilities.updated({Feature.WRITE: Support.UNSUPPORTED})
+    with pytest.raises(AssertionError):
+        await TestFullProfile().test_collection_never_widens_backend(backend, await backend.collection("default"))

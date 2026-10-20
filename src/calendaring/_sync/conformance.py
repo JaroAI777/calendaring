@@ -804,7 +804,7 @@ class SyncConformance:
         if level(collection, Feature.CHANGES) is Support.UNSUPPORTED:
             self.assert_unsupported(collection, Feature.CHANGES, lambda: collection.changes())
             return
-        kind = next(iter(collection.components))
+        kind = next(k for k in KINDS if holds(collection, k))
         seeded = self.seed(collection, [KINDS[kind][0].new(summary=s) for s in ("one", "two")])
         changes = collection.changes()
         assert {i.native_id for i in changes.changed} >= {i.native_id for i in seeded}
