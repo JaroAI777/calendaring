@@ -11,12 +11,27 @@ the merge in recurring-ical-events (API_DESIGN.md Q3).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import copy
+import inspect
+from collections.abc import Iterator, Mapping, Sequence
+from typing import Any, ClassVar
 
+import icalendar
 import pytest
 from icalendar_searcher import Searcher
 
-from calendaring import Backend, Collection, SyncItem, Feature, Item, Support, Task
+from calendaring import (
+    Backend,
+    Collection,
+    SyncItem,
+    BrokenObject,
+    Feature,
+    Item,
+    NotFoundError,
+    Support,
+    SyncToken,
+    Task,
+)
 from calendaring._sync.conformance import snapshot
 from calendaring.memory import (
     FEED,
@@ -72,6 +87,11 @@ class TestFeedProfile(SyncConformance):
         assert isinstance(collection, MemoryBackend.collection_class)
         native_ids = [collection.store.put(item.to_ical()) for item in items]
         return [collection.get_by_native_id(n) for n in native_ids]
+
+    def unseed(self, collection: Collection, item: SyncItem) -> None:
+        assert isinstance(collection, MemoryBackend.collection_class)
+        assert item.native_id is not None
+        del collection.store.objects[item.native_id]
 
 
 def sharing(profile: Profile, store: MemoryStore | None = None) -> MemoryBackend:
@@ -132,6 +152,13 @@ class TestTidyingUp:
         assert [len(c.objects) for c in store.calendars.values()] == [0, 0, 0]
 
 
+# Backends that each break one rule, and the suite test that must catch it.
+
+
+def _listed(o: MemoryObject, calendar: icalendar.Calendar | None = None) -> StoredObject:
+    return StoredObject(o.native_id, o.etag, calendar if calendar is not None else o.calendar, o.data, o)
+
+
 class FirstPageOnly(MemoryCollection):
     """Lists through a paged API and never asks for the second page."""
 
@@ -139,20 +166,159 @@ class FirstPageOnly(MemoryCollection):
         return list(self.store.objects.values())[:50]
 
     def _query(self, searcher: Searcher | None) -> list[StoredObject]:
-        return [StoredObject(o.native_id, o.etag, o.calendar, o.data, o) for o in self._page()]
+        return [_listed(o) for o in self._page()]
 
     def _list_etags(self) -> dict[str, str]:
         return {o.native_id: o.etag for o in self._page()}
 
 
-def test_the_suite_catches_a_backend_that_reads_one_page() -> None:
-    class Backend(MemoryBackend):
-        collection_class = FirstPageOnly
+class MatchesUidSubstrings(MemoryCollection):
+    """Looks a UID up with a server text-match, newest first."""
 
-    suite = TestFullProfile()
+    def _find_uid(self, uid: str) -> StoredObject:
+        for o in reversed(list(self.store.objects.values())):
+            if uid in o.uid:
+                return _listed(o)
+        raise NotFoundError(f"no item with UID {uid!r}")
+
+
+class SearchesTheAccount(MemoryCollection):
+    """Looks a UID up in every collection of the account."""
+
+    def _find_uid(self, uid: str) -> StoredObject:
+        for calendar in self._backend.store.calendars.values():
+            for o in calendar.objects.values():
+                if o.uid == uid:
+                    return _listed(o)
+        raise NotFoundError(f"no item with UID {uid!r}")
+
+
+class ReplacesEventUids(MemoryCollection):
+    """Gives every event a UID of its own, while declaring identity.client-uid."""
+
+    def _create(self, calendar: icalendar.Calendar, *, native_id: str | None, wire: bytes | None) -> StoredObject:
+        for component in calendar.subcomponents:
+            if component.name == "VEVENT":
+                component["UID"] = f"server-{self._backend.store.next()}"
+        return super()._create(calendar, native_id=native_id, wire=None)
+
+
+class StaleListing(MemoryCollection):
+    """Lists the content it first saw under each object's current etag."""
+
+    seen: ClassVar[dict[str, icalendar.Calendar]] = {}
+
+    def _query(self, searcher: Searcher | None) -> list[StoredObject]:
+        cached = [self.seen.setdefault(o.native_id, o.calendar) for o in self.store.objects.values()]
+        return [_listed(o, copy.deepcopy(c)) for o, c in zip(self.store.objects.values(), cached, strict=True)]
+
+
+class ListViewStream(MemoryCollection):
+    """Streams the fields of a list view: no DESCRIPTION, no CATEGORIES."""
+
+    def _iter_query(self, searcher: Searcher | None) -> Iterator[StoredObject]:
+        for o in self.store.objects.values():
+            calendar = o.calendar
+            for component in calendar.subcomponents:
+                for name in ("DESCRIPTION", "CATEGORIES"):
+                    component.pop(name, None)
+            yield _listed(o, calendar)
+
+
+class WordIndex(MemoryCollection):
+    """Narrows a text search with a word index, so "rain" misses "Training"."""
+
+    def _query(self, searcher: Searcher | None) -> list[StoredObject]:
+        wanted = {str(v) for v in getattr(searcher, "_property_filters", {}).values()}
+        out = []
+        for o in self.store.objects.values():
+            words = {w for c in o.calendar.subcomponents for w in str(c.get("SUMMARY", "")).split()}
+            if not wanted or wanted & words:
+                out.append(_listed(o))
+        return out
+
+
+class NoDeletionsFeed(MemoryCollection):
+    """A feed whose change listing never drops an id it has seen."""
+
+    seen: ClassVar[dict[str, str]] = {}
+
+    def _list_etags(self) -> dict[str, str]:
+        self.seen.update(super()._list_etags())
+        return dict(self.seen)
+
+
+class FrozenFeed(MemoryCollection):
+    """Serves its first download forever."""
+
+    first: list[StoredObject] | None = None
+
+    def _query(self, searcher: Searcher | None) -> list[StoredObject]:
+        if FrozenFeed.first is None and self.store.objects:  # the first download that has something in it
+            FrozenFeed.first = [_listed(o) for o in self.store.objects.values()]
+        return FrozenFeed.first or []
+
+    def _list_etags(self) -> dict[str, str]:
+        return {s.native_id: s.etag for s in self._query(None)}
+
+
+class LeakyChangeFeed(MemoryCollection):
+    """Reports changes in every collection of the account."""
+
+    def _changes(
+        self, token: SyncToken | None, known: Mapping[str, str] | None
+    ) -> tuple[Sequence[StoredObject | BrokenObject], list[str], SyncToken]:
+        changed, deleted, new_token = super()._changes(token, known)
+        others = [
+            _listed(o)
+            for c in self._backend.store.calendars.values()
+            if c is not self.store
+            for o in c.objects.values()
+        ]
+        return [*changed, *others], deleted, new_token
+
+
+# What the suite raises when it catches a defect: its own assertion, or a
+# pytest.raises that did not raise.  The round trip catches through verify=True.
+ASSERTS = (AssertionError, pytest.fail.Exception)
+
+CAUGHT: list[tuple[type[MemoryCollection], str, dict[str, Any], Any]] = [
+    (FirstPageOnly, "test_listings_are_not_cut_at_a_page", {}, ASSERTS),
+    (MatchesUidSubstrings, "test_get_finds_the_exact_uid", {}, ASSERTS),
+    (SearchesTheAccount, "test_get_finds_the_exact_uid", {}, ASSERTS),
+    (ReplacesEventUids, "test_get_finds_the_exact_uid", {}, ASSERTS),
+    (StaleListing, "test_a_listing_shows_a_save_made_elsewhere", {}, ASSERTS),
+    (ListViewStream, "test_iter_search_yields_what_search_returns", {}, ASSERTS),
+    (WordIndex, "test_search_gives_the_client_side_answer", {"name": "summary-contains"}, ASSERTS),
+    (FrozenFeed, "test_read_paths_on_seeded_items", {}, ASSERTS),
+    (NoDeletionsFeed, "test_read_paths_on_seeded_items", {}, ASSERTS),
+    (LeakyChangeFeed, "test_changes_follow_a_move", {}, ASSERTS),
+]
+
+
+@pytest.mark.parametrize(
+    ("broken", "test", "params", "expected"),
+    CAUGHT,
+    ids=[f"{c[0].__name__}-{c[2].get('name', '')}".rstrip("-") for c in CAUGHT],
+)
+def test_the_suite_catches(
+    broken: type[MemoryCollection], test: str, params: dict[str, Any], expected: Any
+) -> None:
+    class Backend(MemoryBackend):
+        collection_class = broken
+
+    StaleListing.seen.clear()
+    NoDeletionsFeed.seen.clear()
+    FrozenFeed.first = None
+    profile, suite = (FEED, TestFeedProfile()) if broken in (FrozenFeed, NoDeletionsFeed) else (FULL, TestFullProfile())
     suite._made, suite._borrowed = [], []
-    with pytest.raises(AssertionError):
-        suite.test_listings_are_not_cut_at_a_page(Backend(profile=FULL).collection("default"))
+    backend = Backend(profile=profile)
+    collection = suite.open_collection(backend)
+    method = getattr(suite, test)
+    wanted = inspect.signature(method).parameters
+    fixtures = {"backend": backend, "collection": collection}
+    with pytest.raises(expected):
+        method(**{k: v for k, v in fixtures.items() if k in wanted}, **params)
 
 
 def test_the_suite_catches_a_collection_wider_than_its_backend() -> None:

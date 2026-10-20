@@ -29,6 +29,7 @@ left, so they hold nothing of the suite's after a run.
 from __future__ import annotations
 
 import pickle
+import uuid
 from collections.abc import Iterator, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -153,8 +154,26 @@ def searchers() -> dict[str, Callable[[], Searcher]]:
         s.add_property_filter("CATEGORIES", "work")
         return s
 
+    def text(value: str, operator: str = "contains", case_sensitive: bool = True) -> Callable[[], Searcher]:
+        def make() -> Searcher:
+            s = Searcher()
+            s.add_property_filter("SUMMARY", value, operator=operator, case_sensitive=case_sensitive)
+            return s
+
+        return make
+
+    def no_due() -> Searcher:
+        s = Searcher(todo=True)
+        s.add_property_filter("DUE", None, operator="undef")
+        return s
+
     return {
         "everything": lambda: Searcher(),
+        "summary-contains": text("rain"),
+        "summary-any-case": text("REPORT", case_sensitive=False),
+        "summary-not-containing": text("report", operator="!contains"),
+        "tasks-without-due": no_due,
+        "alarms-in-range": lambda: Searcher(alarm_start=at(3, 9), alarm_end=at(3, 10)),
         "tasks": lambda: Searcher(todo=True),
         "open-tasks": lambda: Searcher(todo=True, include_completed=False),
         "events-in-range": lambda: Searcher(event=True, start=at(2), end=at(4)),
@@ -170,11 +189,17 @@ def dataset() -> list[Item]:
     b = Task.new(summary="B: done", end=at(5), status=TaskStatus.COMPLETED)
     c = Task.new(summary="C: open")
     e1 = Event.new(summary="E1: meeting", start=at(3, 10), end=at(3, 11))
+    alarm = icalendar.Alarm()
+    alarm.add("ACTION", "DISPLAY")
+    alarm.add("DESCRIPTION", "E1 starts soon")
+    alarm.add("TRIGGER", timedelta(minutes=-30))
+    e1.component.add_component(alarm)
+    t = Event.new(summary="T: Training session", start=at(10, 18), end=at(10, 19))
     e2 = Event.new(summary="E2: later", start=at(20, 10), end=at(20, 11))
     r = Event.new(summary="R: daily", start=at(1, 9), end=at(1, 10))
     r.component.add("RRULE", {"FREQ": "DAILY", "COUNT": 5})
     j = Journal.new(summary="J: notes", start=at(2))
-    return [a, b, c, e1, e2, r, j]
+    return [a, b, c, e1, e2, t, r, j]
 
 
 class SyncConformance:
@@ -244,6 +269,10 @@ class SyncConformance:
     def seed(self, collection: Collection, items: Sequence[Item]) -> list[SyncItem]:
         """Store items the way a test needs them.  A read-only backend overrides this to seed natively."""
         return [collection.add(item, loss=ALLOW) for item in items]
+
+    def unseed(self, collection: Collection, item: SyncItem) -> None:
+        """Remove a seeded item.  A read-only backend overrides this to remove it natively."""
+        collection.delete(item)
 
     # --- fixtures -----------------------------------------------------
 
@@ -410,7 +439,7 @@ class SyncConformance:
 
     def test_add_with_native_id(self, collection: Collection) -> None:
         self.add_task(collection, summary="setup")
-        name = "conformance-native-id.ics"
+        name = f"conformance-{uuid.uuid4().hex[:12]}.ics"  # a crashed run may leave one behind
         if level(collection, Feature.IDENTITY_CLIENT_NATIVE_ID) is Support.UNSUPPORTED:
             self.assert_unsupported(
                 collection,
@@ -448,6 +477,85 @@ class SyncConformance:
             assert read.etag == stored.etag
             assert str(read.component["SUMMARY"]) == "read me"
         assert reloaded is not stored
+
+    def test_get_finds_the_exact_uid(self, backend: Backend, collection: Collection) -> None:
+        stored = []
+        for kind, (data_class, _, _, bound_class, _) in KINDS.items():
+            if holds(collection, kind) and writable(collection):
+                item = data_class.new(summary=f"get {kind.value}")
+                added = collection.add(item)
+                if level(collection, Feature.IDENTITY_CLIENT_UID) is not Support.UNSUPPORTED:
+                    assert added.uid == item.uid, f"identity.client-uid: the {kind.value} UID was replaced"
+                stored.append((added, bound_class))
+        if not stored:
+            pytest.skip("nothing can be stored here")
+        for added, bound_class in stored:
+            found = collection.get(added.uid)
+            assert isinstance(found, bound_class)
+            assert found.native_id == added.native_id
+        if level(collection, Feature.IDENTITY_CLIENT_UID) is not Support.UNSUPPORTED:
+            kind_class = stored[0][0].as_data().__class__
+            suffix = f"{stored[0][0].uid}@conformance.invalid"
+            longer = collection.add(kind_class.new(summary="longer", uid=f"11-{suffix}"))
+            shorter = collection.add(kind_class.new(summary="shorter", uid=f"1-{suffix}"))
+            assert (collection.get(shorter.uid)).native_id == shorter.native_id
+            assert (collection.get(longer.uid)).native_id == longer.native_id
+            with pytest.raises(NotFoundError):
+                collection.get(f"-{suffix}")
+        if backend.capabilities.supports(Feature.CREATE_COLLECTION):
+            other = self.open_collection(backend, "conformance-other")
+            if writable(other) and holds(other, Component.TASK):
+                elsewhere = other.add_task(summary="in another collection")
+                with pytest.raises(NotFoundError):
+                    collection.get(elsewhere.uid)
+
+    def test_add_with_native_id_keeps_the_uid(self, collection: Collection) -> None:
+        if level(collection, Feature.IDENTITY_CLIENT_NATIVE_ID) is Support.UNSUPPORTED:
+            return  # test_add_with_native_id checked that it raises
+        if level(collection, Feature.IDENTITY_CLIENT_UID) is Support.UNSUPPORTED:
+            pytest.skip("the backend assigns UIDs")
+        item = Task.new(summary="named and identified")
+        name = f"conformance-{uuid.uuid4().hex[:12]}.ics"
+        stored = collection.add(item, native_id=name)
+        assert stored.uid == item.uid
+        assert (collection.get(item.uid)).native_id == name
+
+    def test_a_listing_shows_a_save_made_elsewhere(self, collection: Collection) -> None:
+        stored = self.add_task(collection, summary="original", description="kept")
+        other = collection.get(stored.uid)
+        other.component["SUMMARY"] = "saved elsewhere"
+        other.save()
+        listed = [i for i in collection.search() if i.native_id == stored.native_id]
+        streamed = [i for i in collection.iter_search() if i.native_id == stored.native_id]
+        for [read] in (listed, streamed):
+            assert read.etag != stored.etag, "a listing gave the old etag after a save"
+            assert str(read.component["SUMMARY"]) == "saved elsewhere", "a listing gave old content"
+            assert str(read.component["DESCRIPTION"]) == "kept"
+        stored.component["SUMMARY"] = "stale"
+        with pytest.raises(ConflictError):
+            stored.save()
+
+    def test_read_paths_on_seeded_items(self, collection: Collection) -> None:
+        """What a read-only backend must pass too: everything here is stored through ``seed()``."""
+        kind = next(k for k in KINDS if holds(collection, k))
+        new = KINDS[kind][0].new
+        [first] = self.seed(collection, [new(summary="seeded first")])
+        assert (collection.get(first.uid)).native_id == first.native_id
+        assert (collection.get_by_native_id(nid(first))).uid == first.uid
+        assert (collection.reload(first)).etag == first.etag
+        if level(collection, Feature.CHANGES) is Support.UNSUPPORTED:
+            return
+        start = collection.changes()
+        [second] = self.seed(collection, [new(summary="seeded second")])
+        since = collection.changes(start.token)
+        assert nid(second) in {nid(i) for i in since.changed}
+        assert nid(first) not in {nid(i) for i in since.changed}
+        assert since.deleted == []
+        self.unseed(collection, first)
+        gone = collection.changes(since.token)
+        assert gone.deleted == [nid(first)]
+        with pytest.raises(NotFoundError):
+            collection.get(first.uid)
 
     def test_wire(self, collection: Collection) -> None:
         stored = self.add_task(collection, summary="bytes")
@@ -687,7 +795,11 @@ class SyncConformance:
         self.seed(collection, wanted)
         listed = collection.search()
         iterated = [i for i in collection.iter_search()]
-        assert sorted(key(i) for i in iterated) == sorted(key(i) for i in listed)
+
+        def fields(items: Sequence[SyncItem]) -> list[tuple[Any, ...]]:
+            return sorted((key(i), i.native_id, i.etag, i.component.to_ical()) for i in items)
+
+        assert fields(iterated) == fields(listed), "iter_search() must give what search() gives, field by field"
 
     def test_listings_are_not_cut_at_a_page(self, collection: Collection) -> None:
         kind = next(k for k in KINDS if holds(collection, k))
@@ -901,6 +1013,25 @@ class SyncConformance:
         with pytest.raises(NotFoundError):
             collection.get_by_native_id(nid(task))
         assert (target.get_by_native_id(nid(moved))).uid == moved.uid
+
+    def test_changes_follow_a_move(self, backend: Backend, collection: Collection) -> None:
+        if Support.UNSUPPORTED in (level(collection, Feature.CHANGES), level(collection, Feature.MOVE)):
+            return  # the tests of each feature checked that it raises
+        task = self.add_task(collection, summary="moving")
+        if not backend.capabilities.supports(Feature.CREATE_COLLECTION):
+            pytest.skip("a second collection is needed, and the backend cannot make one")
+        target = self.open_collection(backend, "conformance-target")
+        if level(target, Feature.CHANGES) is Support.UNSUPPORTED:
+            pytest.skip("the second collection has no change feed")
+        here, there = collection.changes(), target.changes()
+        elsewhere = target.add_task(summary="added there")
+        moved = collection.move(task, target)
+        since_here = collection.changes(here.token)
+        since_there = target.changes(there.token)
+        assert since_here.deleted == [nid(task)], "a moved item is deleted where it was"
+        assert not {nid(elsewhere), nid(moved)} & {nid(i) for i in since_here.changed}
+        assert {nid(moved), nid(elsewhere)} <= {nid(i) for i in since_there.changed}
+        assert since_there.deleted == []
 
     # === collections ==================================================
 
