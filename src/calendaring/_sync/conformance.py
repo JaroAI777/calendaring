@@ -21,7 +21,9 @@ say so.
 
 The suite makes its own collection where the backend can.  Where it cannot,
 it uses the first one listed, compares only what the test itself stored, and
-deletes what it stored afterwards.
+deletes what it stored afterwards, and puts back a name it changed.  Where it
+can make collections but not delete them, it reuses the ones an earlier run
+left, so they hold nothing of the suite's after a run.
 """
 
 from __future__ import annotations
@@ -49,7 +51,7 @@ from ..errors import (
 )
 from ..items import Event, Item, Journal, Task, TaskStatus
 from ..loss import ALLOW, WARN, Loss
-from ..types import Component, Scope, SyncToken
+from ..types import Component, Scope, StoredObject, SyncToken
 from .backend import Backend
 from .collection import Collection
 from .items import SyncEvent, SyncItem, SyncJournal, SyncTask
@@ -178,8 +180,16 @@ class SyncConformance:
         raise NotImplementedError("a conformance test class must implement open_backend()")
 
     def open_collection(self, backend: Backend, name: str = "conformance") -> Collection:
-        """A collection to test against: made if the backend may be able to, else the first one listed."""
+        """A collection to test against: made if the backend may be able to, else the first one listed.
+
+        Where collections can be made but not deleted, the one a previous run
+        left is used again, so a run leaves one collection per name behind.
+        """
         if backend.capabilities.level(Feature.CREATE_COLLECTION) is not Support.UNSUPPORTED:
+            deletable = backend.capabilities.level(Feature.DELETE_COLLECTION) is not Support.UNSUPPORTED
+            left = None if deletable else self.left_behind(backend, name)
+            if left is not None:
+                return self.borrow(left)
             try:
                 made = backend.create_collection(
                     name, components=(Component.EVENT, Component.TASK, Component.JOURNAL)
@@ -188,13 +198,33 @@ class SyncConformance:
                 if backend.capabilities.level(Feature.CREATE_COLLECTION) is not Support.UNKNOWN:
                     raise
             else:
+                if not deletable:
+                    return self.borrow(made)
                 self._made.append(made)
                 return made
         existing = backend.collections()
         if not existing:
             pytest.fail("the backend can neither create a collection nor list one")
-        collection = existing[0]
-        self._borrowed.append((collection, {i.native_id for i in collection.search()}))
+        return self.borrow(existing[0])
+
+    def left_behind(self, backend: Backend, name: str) -> Collection | None:
+        named = [c for c in backend.collections() if c.name == name]
+        return named[0] if named else None
+
+    def borrow(self, collection: Collection) -> Collection:
+        """Use a collection the suite may not delete, and note what it writes there, to delete only that."""
+        before = {i.native_id for i in collection.search()}
+        written: set[str] = set()  # native ids and UIDs of what the suite created
+        create = collection._create
+
+        def noting(calendar: icalendar.Calendar, *, native_id: str | None, wire: bytes | None) -> StoredObject:
+            stored = create(calendar, native_id=native_id, wire=wire)
+            written.add(stored.native_id)
+            written.update(str(c.get("UID")) for c in stored.calendar.subcomponents if "UID" in c)
+            return stored
+
+        collection._create = noting  # type: ignore[method-assign]
+        self._borrowed.append((collection, before, written))
         return collection
 
     def seed(self, collection: Collection, items: Sequence[Item]) -> list[SyncItem]:
@@ -206,22 +236,36 @@ class SyncConformance:
     @pytest.fixture
     def backend(self) -> Iterator[Backend]:
         self._made: list[Collection] = []
-        self._borrowed: list[tuple[Collection, set[str | None]]] = []
+        self._borrowed: list[tuple[Collection, set[str | None], set[str]]] = []
         backend = self.open_backend()
         with backend:
             yield backend
             self.tidy_up(backend)
 
     def tidy_up(self, backend: Backend) -> None:
-        """Delete the collections the test made, and what it stored in one it borrowed."""
+        """Delete the collections the test made, and what it stored in one it borrowed.
+
+        In a borrowed collection, an item is the suite's if it created it, or
+        if it carries or relates to a UID the suite created (a completed
+        occurrence the backend stored as a new object): anything else arrived
+        from another client while the test ran.
+        """
         for made in self._made:
-            if backend.capabilities.level(Feature.DELETE_COLLECTION) is not Support.UNSUPPORTED:
-                made.delete_collection()
-        for borrowed, before in self._borrowed:
-            if writable(borrowed):
-                for item in borrowed.search():
-                    if item.native_id not in before and item.native_id is not None:
-                        borrowed.delete(item.native_id)
+            made.delete_collection()
+        for borrowed, before, written in self._borrowed:
+            if not writable(borrowed):
+                continue
+            for native_id in {i.native_id for i in borrowed.search() if self.wrote(i, before, written)}:
+                assert native_id is not None
+                borrowed.delete(native_id)
+
+    @staticmethod
+    def wrote(item: Item, before: set[str | None], written: set[str]) -> bool:
+        if item.native_id in before:
+            return False
+        related = item.component.get("RELATED-TO", [])
+        related = related if isinstance(related, list) else [related]
+        return item.native_id in written or item.uid in written or any(str(r) in written for r in related)
 
     @pytest.fixture
     def collection(self, backend: Backend) -> Collection:
@@ -827,9 +871,14 @@ class SyncConformance:
                 collection.set_name("renamed")
             assert info.value.feature == Feature.COLLECTION_SET_NAME
             return
+        name = collection.name
         collection.set_name("conformance renamed")
-        assert collection.name == "conformance renamed"
-        assert (backend.collection(collection.id)).name == "conformance renamed"
+        try:
+            assert collection.name == "conformance renamed"
+            assert (backend.collection(collection.id)).name == "conformance renamed"
+        finally:
+            if name is not None:  # a borrowed or reused collection is put back as it was
+                collection.set_name(name)
 
     def test_create_and_delete_collection(self, backend: Backend) -> None:
         before = [c.id for c in backend.collections()]
@@ -839,15 +888,21 @@ class SyncConformance:
             assert info.value.feature == Feature.CREATE_COLLECTION
             assert [c.id for c in backend.collections()] == before
             return
-        made = backend.create_collection("conformance-new", components=(Component.TASK,))
+        deletable = backend.capabilities.supports(Feature.DELETE_COLLECTION)
+        # Without delete-collection, only the first run on a backend makes it: later ones find it left there.
+        made = None if deletable else self.left_behind(backend, "conformance-new")
+        if made is None:
+            made = backend.create_collection("conformance-new", components=(Component.TASK,))
         assert made.components == frozenset({Component.TASK})
         assert made.id in [c.id for c in backend.collections()]
-        if not backend.capabilities.supports(Feature.DELETE_COLLECTION):
+        if not deletable:
             with pytest.raises(UnsupportedError) as info:
                 made.delete_collection()
             assert info.value.feature == Feature.DELETE_COLLECTION
             return
+        self._made.append(made)
         made.delete_collection()
+        self._made.remove(made)
         assert made.id not in [c.id for c in backend.collections()]
 
     # === binding ======================================================

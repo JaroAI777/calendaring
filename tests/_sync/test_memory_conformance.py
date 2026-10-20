@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from calendaring import Backend, Collection, SyncItem, Item, Task
-from calendaring.memory import FEED, FULL, MINIMAL, TRACKER, MemoryBackend
+from calendaring.memory import FEED, FULL, MINIMAL, TRACKER, MemoryBackend, MemoryStore, Profile
 from calendaring.testing import SyncConformance
 
 
@@ -54,3 +54,49 @@ class TestFeedProfile(SyncConformance):
         assert isinstance(collection, MemoryBackend.collection_class)
         native_ids = [collection.store.put(item.to_ical()) for item in items]
         return [collection.get_by_native_id(n) for n in native_ids]
+
+
+def sharing(profile: Profile, store: MemoryStore | None = None) -> MemoryBackend:
+    """A backend on ``store``, like a second connection to a server that keeps its data."""
+    backend = MemoryBackend(profile=profile)
+    if store is not None:
+        backend.store = backend.native = store
+    return backend
+
+
+class TestTidyingUp:
+    """What the suite leaves behind on a backend that keeps data between tests."""
+
+    def suite(self) -> SyncConformance:
+        suite = SyncConformance()
+        suite._made, suite._borrowed = [], []
+        return suite
+
+    def test_a_concurrent_write_to_a_borrowed_collection_survives(self) -> None:
+        backend = sharing(MINIMAL)
+        suite = self.suite()
+        collection = suite.open_collection(backend)
+        collection.add_task(summary="the suite's")
+        [shared] = sharing(MINIMAL, backend.store).collections()
+        shared.add_task(summary="the user's, from their phone")
+        suite.tidy_up(backend)
+        assert [str(i.component["SUMMARY"]) for i in shared.search()] == ["the user's, from their phone"]
+
+    def test_a_borrowed_collection_keeps_its_name(self) -> None:
+        backend = sharing(MINIMAL)
+        suite = self.suite()
+        suite.test_set_name(backend, suite.open_collection(backend))
+        suite.tidy_up(backend)
+        assert (backend.collection("default")).name == "Default"
+
+    def test_without_delete_collection_one_collection_is_reused(self) -> None:
+        store = sharing(TRACKER).store
+        for _ in range(3):
+            backend = sharing(TRACKER, store)
+            suite = self.suite()
+            collection = suite.open_collection(backend)
+            collection.add_task(summary="the suite's")
+            suite.test_create_and_delete_collection(backend)
+            suite.tidy_up(backend)
+        assert sorted(store.calendars) == ["conformance", "conformance-new", "default"]
+        assert [len(c.objects) for c in store.calendars.values()] == [0, 0, 0]
