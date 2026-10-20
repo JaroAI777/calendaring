@@ -60,6 +60,7 @@ class Feature(StrEnum):
     ALARMS = "alarms"
     TIMEZONES = "timezones"
     DATES = "dates"
+    TIME_LOG = "time-log"
 
 
 # Declared on the backend rather than on a collection (§5.2).

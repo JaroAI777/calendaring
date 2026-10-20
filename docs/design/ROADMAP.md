@@ -455,24 +455,49 @@ were moved out of that grant for the same reason (see the note in the MoU).  It
 therefore must not be trimmed, and it must land before `plann` reaches its Phase 4.
 
 **Tasks:**
-- [ ] Implement the model 0.1 recommends: estimate, spent, and the relationship
+- [x] Implement the model 0.1 recommends: estimate, spent, and the relationship
       between them
-- [ ] Decide and document the iCalendar representation, including whether an `X-`
+- [x] Decide and document the iCalendar representation, including whether an `X-`
       property is used and under whose namespace — iCalendar has no standard answer,
       and whatever is chosen here is what other tools will have to read
-- [ ] Time spent is an append-only log with the total derived — settled by 0.1
+- [x] Time spent is an append-only log with the total derived — settled by 0.1
       ([survey 3.2](TASK_MODEL_SURVEY.md#32-dimension-by-dimension)). What
       remains is what round-trips through a backend that stores only the total
-- [ ] The API: start, stop, log a duration after the fact, amend, and read back
+- [x] The API: start, stop, log a duration after the fact, amend, and read back
 - [ ] Map it onto each backend's native notion where one exists (task trackers
       generally have one; CalDAV does not), and declare the capability honestly
-      where it does not
-- [ ] Extend the conformance suite (1.2) to cover it, including the lossy cases
-- [ ] Aggregation primitives sufficient for `plann`'s `sum_hours` — grouping a
+      where it does not — the capability and the hooks are in, and CalDAV
+      (2.1) declares it; a tracker's own log is 2.5's
+- [x] Extend the conformance suite (1.2) to cover it, including the lossy cases
+- [x] Aggregation primitives sufficient for `plann`'s `sum_hours` — grouping a
       selection into budget lines with per-line subtotals, keeping committed and
       spent time separate
-- [ ] Coordinate the design with `plann` before freezing it; a review of how
+- [x] Coordinate the design with `plann` before freezing it; a review of how
       the design affects `plann` is cheap now and expensive after 1.0
+
+Notes from doing it:
+
+- The design is "Time tracking" in [API_DESIGN §3.4](API_DESIGN.md#34-task).
+  It was reviewed by plann's author in three rounds.  His comments
+  changed who did the work from `ORGANIZER` to RFC 9073 `PARTICIPANT`,
+  and cut the planned `X-` properties from five to two
+  (`X-PYCAL-TIME-ENTRY`, `X-PYCAL-TIMER-START`).  plann's earlier design
+  notes (a `VJOURNAL` per entry) were set aside: a `VJOURNAL` holds no
+  interval.
+- Time is logged against events as well as tasks (time spent in a
+  meeting), so the methods are on every bound item.
+- Research during the review overturned an assumption of the survey: the
+  trackers it took for total-only (GitLab, Request Tracker, Kanboard,
+  OpenProject, Gitea) mostly keep individual entries, and what they lack is
+  the start time.  So `time-log` is `LOSSY` with `details["lost"]` naming
+  the missing fields; `total-only` is the exception.
+- Two fake backends in `tests/_async/test_memory_conformance.py`, a
+  tracker's own log without start times and a total-only one, run the
+  lossy branches until 2.5 brings real ones.
+- The 2.1 backend declares `time-log` `FULL` on a server caldav has hints
+  for (the conformance suite checks the `PARTICIPANT` component on
+  Xandikos and Radicale), `UNKNOWN` on another, and `UNSUPPORTED` in a
+  calendar holding no events, where `time_log_collection` points elsewhere.
 
 ---
 

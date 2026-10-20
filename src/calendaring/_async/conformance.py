@@ -56,6 +56,7 @@ from ..errors import (
 )
 from ..items import Event, Item, Journal, Task, TaskStatus
 from ..loss import ALLOW, WARN, Loss
+from ..timetracking import is_entry
 from ..types import Component, Scope, StoredObject, SyncToken
 from .backend import AsyncBackend
 from .collection import AsyncCollection
@@ -64,8 +65,11 @@ from .items import AsyncEvent, AsyncItem, AsyncJournal, AsyncTask
 __all__ = ["AsyncConformance"]
 
 
-def at(day: int, hour: int = 12) -> datetime:
-    return datetime(2026, 11, day, hour, tzinfo=UTC)
+def at(day: int, hour: int = 12, minute: int = 0) -> datetime:
+    return datetime(2026, 11, day, hour, minute, tzinfo=UTC)
+
+
+HOUR = timedelta(hours=1)
 
 
 def key(item: Item) -> tuple[str, str | None]:
@@ -1122,6 +1126,167 @@ class AsyncConformance:
         token = (await other.changes()).token
         with pytest.raises(SyncTokenError):
             await collection.changes(token)
+
+    # === time tracking ================================================
+
+    async def logged_against(self, collection: AsyncCollection) -> AsyncItem:
+        """A stored task (an event where there are no tasks) to log time against, or the test ends here."""
+        kind = Component.TASK if holds(collection, Component.TASK) else Component.EVENT
+        if not holds(collection, kind):
+            pytest.skip("the collection holds neither tasks nor events")
+        [item] = await self.seed(collection, [KINDS[kind][0].new(summary="logged against", start=at(1, 8))])
+        return item
+
+    async def assert_time_log_unsupported(self, collection: AsyncCollection, item: AsyncItem) -> bool:
+        """True if the time log is unsupported here, after checking that logging raises before any I/O."""
+        if level(collection, Feature.TIME_LOG) is not Support.UNSUPPORTED:
+            return False
+        await self.assert_unsupported(collection, Feature.TIME_LOG, lambda: item.log_time(spent=HOUR))
+        await self.assert_unsupported(collection, Feature.TIME_LOG, lambda: item.time_log())
+        return True
+
+    def lost(self, collection: AsyncCollection) -> set[str]:
+        return set(collection.capabilities.details(Feature.TIME_LOG).get("lost", ()))
+
+    def total_only(self, collection: AsyncCollection) -> bool:
+        return bool(collection.capabilities.details(Feature.TIME_LOG).get("total-only"))
+
+    async def test_time_log_round_trips_as_declared(self, collection: AsyncCollection) -> None:
+        item = await self.logged_against(collection)
+        if await self.assert_time_log_unsupported(collection, item):
+            return
+        assert await item.time_log() == []
+        assert await item.time_spent() == timedelta(0)
+        if not writable(collection):
+            await self.assert_unsupported(collection, Feature.WRITE, lambda: item.log_time(spent=HOUR))
+            return
+        users = ("mailto:alice@example.com", "mailto:bob@example.com")
+        logged = await item.log_time(start=at(3, 9), end=at(3, 11), users=users, comment="first draft\nwith figures")
+        assert logged.duration == 2 * HOUR
+        assert not any(is_entry(r.component) for r in await item.relatives()), "a time entry is no subtask"
+        [read] = await item.time_log()
+        if self.total_only(collection):
+            assert await item.time_spent() == 4 * HOUR, "two people for two hours, kept as a total"
+            assert read.start is None, "a total-only backend has no entries to give a start"
+            return
+        assert read.duration == 2 * HOUR
+        if "users" not in self.lost(collection):
+            assert await item.time_spent() == 4 * HOUR, "person-time: two people for two hours"
+        lost = self.lost(collection)
+        expected: dict[str, tuple[object, object]] = {
+            "start-time": (read.start, at(3, 9)),
+            "end": (read.end, at(3, 11)),
+        }
+        expected |= {"users": (read.users, users), "comment": (read.comment, "first draft\nwith figures")}
+        for name, (got, sent) in expected.items():
+            if name in lost:
+                assert got in (None, ()), f"{name} is declared lost, yet read back as {got!r}: never invent it"
+            else:
+                assert got == sent, f"{name}: sent {sent!r}, read back {got!r}"
+        assert read.id is not None
+
+    async def test_log_time_takes_two_of_three(self, collection: AsyncCollection) -> None:
+        item = await self.logged_against(collection)
+        if await self.assert_time_log_unsupported(collection, item) or not writable(collection):
+            return
+        before = await snapshot(collection)
+        with pytest.raises(ValueError, match="disagree"):
+            await item.log_time(spent=3 * HOUR, start=at(3, 9), end=at(3, 11))
+        with pytest.raises(ValueError, match="two of"):
+            await item.log_time(start=at(3, 9))
+        assert await snapshot(collection) == before, "a refused entry wrote something"
+        by_start = await item.log_time(spent=HOUR, start=at(3, 9))
+        by_end = await item.log_time(spent=HOUR, end=at(4, 11))
+        recent = await item.log_time(spent=HOUR)
+        assert [e.duration for e in (by_start, by_end, recent)] == [HOUR] * 3
+        assert await item.time_spent() == 3 * HOUR
+        if not self.total_only(collection) and "start-time" not in self.lost(collection):
+            assert (by_start.start, by_start.end) == (at(3, 9), at(3, 10))
+            assert (by_end.start, by_end.end) == (at(4, 10), at(4, 11))
+
+    async def test_a_day_of_durations_lines_up(self, collection: AsyncCollection) -> None:
+        item = await self.logged_against(collection)
+        if await self.assert_time_log_unsupported(collection, item) or not writable(collection):
+            return
+        tuesday = at(3).date()
+        first = await item.log_time(spent=3 * HOUR, day=tuesday)
+        second = await item.log_time(spent=2 * HOUR, day=tuesday)
+        assert await item.time_spent() == 5 * HOUR
+        if self.total_only(collection) or "start-time" in self.lost(collection):
+            return
+        assert first.start is not None
+        assert first.start.date() == tuesday
+        assert second.start == first.end, "the day's entries line up back to back"
+
+    async def test_the_timer(self, collection: AsyncCollection) -> None:
+        if not holds(collection, Component.TASK):
+            pytest.skip("the timer is for tasks, and the collection holds none")
+        [task] = await self.seed(collection, [Task.new(summary="timed")])
+        assert isinstance(task, AsyncTask)
+        if level(collection, Feature.TIME_LOG) is Support.UNSUPPORTED:
+            await self.assert_unsupported(collection, Feature.TIME_LOG, lambda: task.start_timer())
+            return
+        if not writable(collection):
+            await self.assert_unsupported(collection, Feature.WRITE, lambda: task.start_timer())
+            return
+        await task.start_timer(at=at(3, 9))
+        with pytest.raises(ValueError, match="running"):
+            await task.start_timer()
+        reread = await collection.reload(task)
+        assert isinstance(reread, AsyncTask)
+        [running] = await reread.time_log()
+        assert running.running
+        assert running.start == at(3, 9)
+        entry = await task.stop_timer(at=at(3, 10, 30), comment="done for now")
+        assert entry.duration == timedelta(hours=1, minutes=30)
+        with pytest.raises(ValueError, match="running"):
+            await task.stop_timer()
+        [stored] = await (await collection.reload(task)).time_log()
+        assert not stored.running
+        assert stored.duration == timedelta(hours=1, minutes=30)
+        assert "X-PYCAL-TIMER-START" not in (await collection.reload(task)).component, "the timer is temporary"
+
+    async def test_amend_and_delete_time(self, collection: AsyncCollection) -> None:
+        item = await self.logged_against(collection)
+        if await self.assert_time_log_unsupported(collection, item) or not writable(collection):
+            return
+        entry = await item.log_time(start=at(3, 9), end=at(3, 10), comment="first")
+        if self.total_only(collection):
+            [read] = await item.time_log()
+            await self.assert_unsupported(collection, Feature.TIME_LOG, lambda: item.amend_time(read, comment="x"))
+            await self.assert_unsupported(collection, Feature.TIME_LOG, lambda: item.delete_time(read))
+            return
+        amended = await item.amend_time(entry, spent=2 * HOUR)
+        assert amended.duration == 2 * HOUR
+        assert amended.id == entry.id
+        [read] = await item.time_log()
+        assert read.duration == 2 * HOUR
+        if "comment" not in self.lost(collection):
+            assert read.comment == "first", "amending one field kept the others"
+        await item.delete_time(read)
+        assert await item.time_log() == []
+
+    async def test_time_spent_in_a_meeting(self, collection: AsyncCollection) -> None:
+        if not holds(collection, Component.EVENT):
+            pytest.skip("the collection holds no events")
+        [meeting] = await self.seed(collection, [Event.new(summary="planning", start=at(5, 9), end=at(5, 10))])
+        if await self.assert_time_log_unsupported(collection, meeting) or not writable(collection):
+            return
+        await meeting.log_time(start=at(5, 9), end=at(5, 10), users=("mailto:alice@example.com",))
+        [entry] = await meeting.time_log()
+        assert entry.duration == HOUR
+        assert await collection.reload(meeting) == meeting, "logging time does not touch the meeting itself"
+
+    async def test_time_entries_in_a_range(self, collection: AsyncCollection) -> None:
+        item = await self.logged_against(collection)
+        if await self.assert_time_log_unsupported(collection, item) or not writable(collection):
+            return
+        if self.total_only(collection) or "start-time" in self.lost(collection):
+            pytest.skip("entries without a start cannot be searched by time")
+        inside = await item.log_time(start=at(10, 9), end=at(10, 10))
+        await item.log_time(start=at(12, 9), end=at(12, 10))
+        found = await collection.time_entries(at(10, 0), at(11, 0))
+        assert [(uid, e.id) for uid, e in found] == [(item.uid, inside.id)]
 
     # === moving =======================================================
 

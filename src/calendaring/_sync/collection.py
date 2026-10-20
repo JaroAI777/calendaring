@@ -13,10 +13,12 @@ import base64
 import binascii
 import copy
 import json
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager, suppress
-from datetime import UTC, datetime, timedelta
+from dataclasses import replace
+from datetime import UTC, date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, Literal, overload
 
 import icalendar
@@ -26,6 +28,7 @@ from icalendar_searcher import Searcher
 from .._mapping import Change, differences, plan_calendar_losses, plan_losses
 from ..capabilities import BACKEND_FEATURES, Capabilities, Feature, Support
 from ..errors import (
+    AlreadyExistsError,
     CalendaringError,
     ConflictError,
     InvalidDataError,
@@ -35,8 +38,31 @@ from ..errors import (
     UnsupportedError,
     VerificationError,
 )
-from ..items import Event, Item, Journal, Task, _items_of, _parse, split_stored, without_occurrence
+from ..items import (
+    Event,
+    Item,
+    Journal,
+    Task,
+    _items_of,
+    _parse,
+    _set_datetime,
+    _wrap_component,
+    split_stored,
+    without_occurrence,
+)
 from ..loss import RAISE, LossPolicy
+from ..timetracking import (
+    X_TIME_ENTRY,
+    X_TIMER_START,
+    TimeEntry,
+    apply_entry,
+    comparable,
+    entry_from_component,
+    entry_to_component,
+    is_entry,
+    resolve,
+    running_timer,
+)
 from ..types import BrokenObject, ChangeSet, Component, Scope, StoredObject, SyncToken
 from .items import BOUND, SyncEvent, SyncItem, SyncJournal, SyncTask
 
@@ -44,6 +70,13 @@ if TYPE_CHECKING:
     from .backend import Backend
 
 __all__ = ["Collection"]
+
+
+def _by_start(entry: TimeEntry) -> tuple[bool, float]:
+    """Sort key: by start (a floating time read as local); entries without one last, by when they were logged."""
+    when = entry.start or entry.logged
+    return entry.start is None, when.timestamp() if when is not None else 0.0
+
 
 COMPONENT_FEATURE = {
     Component.EVENT: Feature.COMPONENT_EVENT,
@@ -107,6 +140,10 @@ class Collection(ABC):
         self.components = frozenset(components)
         self.capabilities = capabilities
         self.native = native
+        # Where time entries go and are read from (§3.4): many task lists hold no events.
+        self.time_log_collection: Collection | None = None
+        # Where a day of durations starts, with log_time(spent=..., day=...).
+        self.workday_start = time(8)
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.backend_id}/{self.id}>"
@@ -229,6 +266,49 @@ class Collection(ABC):
 
     def _wrap_native(self, native_item: object) -> StoredObject:
         raise UnsupportedError(None, f"{type(self).__name__} cannot wrap {type(native_item).__name__}")
+
+    # The time log (§3.4).  The defaults store entries as VEVENTs in the
+    # time-log collection; a backend with a time log of its own (a tracker,
+    # roadmap 2.5) overrides all five.
+
+    def _time_entries(
+        self, start: datetime | None, end: datetime | None, *, parent: str | None = None
+    ) -> list[tuple[str | None, TimeEntry]]:
+        """``(the UID it was logged against, entry)`` for the entries stored here: in a time range, for a parent."""
+        searcher = (
+            Searcher(event=True, start=start, end=end)
+            if start is not None and end is not None
+            else Searcher(event=True)
+        )
+        searcher.add_property_filter(X_TIME_ENTRY, "TRUE", operator="==")
+        if parent is not None:
+            searcher.add_property_filter("RELATED-TO", parent, operator="==")
+        found = [entry_from_component(i.component) for i in self.search(searcher) if is_entry(i.component)]
+        return [pair for pair in found if parent is None or pair[0] == parent]
+
+    def _time_log(self, item: Item) -> list[TimeEntry]:
+        return [entry for _, entry in self._log_target()._time_entries(None, None, parent=item.uid)]
+
+    def _add_time(self, item: Item, entry: TimeEntry) -> TimeEntry:
+        stored = self._log_target().add(Event(_wrap_component(entry_to_component(entry, parent=item))))
+        return entry_from_component(stored.component)[1]
+
+    def _amend_time(self, item: Item, old: TimeEntry, new: TimeEntry) -> TimeEntry:
+        assert old.id is not None
+        stored = self._log_target().get(old.id)
+        component = stored.component  # edited in place: what other clients added stays
+        apply_entry(component, new)
+        sequence = int(component.pop("SEQUENCE", 0))
+        for name, value in (("SEQUENCE", sequence + 1), ("LAST-MODIFIED", datetime.now(UTC))):
+            component.pop(name, None)
+            component.add(name, value)
+        stored.icalendar.add_missing_timezones()
+        stored.save()
+        return entry_from_component(stored.component)[1]
+
+    def _delete_time(self, item: Item, entry: TimeEntry) -> None:
+        assert entry.id is not None
+        (self._log_target().get(entry.id)).delete()
 
     def _plan_losses(self, component: icalendar.Component) -> list[Change]:
         """Override for mapping rules beyond the capability table's ``values`` and ``map``."""
@@ -530,7 +610,7 @@ class Collection(ABC):
                 except PartialResultError as exc:
                     broken.extend(exc.broken)
                     listed = list(exc.results)
-                for other in listed:
+                for other in (i for i in listed if not is_entry(i.component)):  # a time entry is no subtask
                     for value in self._related_to(other):
                         kind = str(value.params.get("RELTYPE", "PARENT")).upper()
                         if str(value) == item.uid and kind in back and (wanted is None or back[kind] == wanted):
@@ -798,6 +878,162 @@ class Collection(ABC):
             result = self.save(data, loss=loss, verify=verify)
             assert isinstance(result, SyncTask)
             return result
+
+    # === the time log ==================================================
+
+    def _log_target(self) -> Collection:
+        return self.time_log_collection or self
+
+    def _require_time_log(self, *, write: bool = False) -> Collection:
+        target = self._log_target()
+        target._require(Feature.TIME_LOG)
+        if write:
+            target._require(Feature.WRITE)
+        return target
+
+    def _require_entries(self) -> None:
+        """Amending or deleting needs entries; a backend that keeps only the total has none."""
+        if self._log_target().capabilities.details(Feature.TIME_LOG).get("total-only"):
+            raise UnsupportedError(Feature.TIME_LOG, "the backend keeps only the total time spent")
+
+    def time_log(self, item: Item, *, now: datetime | None = None) -> list[TimeEntry]:
+        """The entries logged against ``item``, by start; a running timer last."""
+        with self._context():
+            self._require_time_log()
+            entries = sorted(self._time_log(item), key=_by_start)
+            timer = running_timer(item, now or datetime.now(UTC))
+            return entries + ([timer] if timer is not None else [])
+
+    def time_spent(self, item: Item, *, now: datetime | None = None) -> timedelta:
+        """The sum of the time log in person-time, a running timer up to now."""
+        return sum((e.person_time for e in self.time_log(item, now=now)), timedelta(0))
+
+    def log_time(
+        self,
+        item: Item,
+        *,
+        spent: timedelta | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        day: date | None = None,
+        users: Iterable[str] = (),
+        comment: str | None = None,
+    ) -> TimeEntry:
+        """Log time against ``item``: two of ``spent``, ``start`` and ``end``, or ``spent`` with a ``day``."""
+        with self._context():
+            self._require_time_log(write=True)
+            now = datetime.now(UTC)
+            if day is not None:
+                if spent is None or start is not None or end is not None:
+                    raise ValueError("log_time(): day= goes with spent= alone")
+                start = self._day_cursor(day, tuple(users))
+            begin, finish = resolve(spent=spent, start=start, end=end, now=now)
+            entry = TimeEntry(finish - begin, begin, finish, tuple(users), comment, logged=now)
+            return self._add_time(item, entry)
+
+    def _day_cursor(self, day: date, users: tuple[str, ...]) -> datetime:
+        """Where the next entry of these users' ``day`` starts: after their last one, else at the workday's start.
+
+        A day that fills up runs on past midnight: the sum is what counts.
+        """
+        midnight = datetime.combine(day, time()).astimezone()
+        listed = self._log_target()._time_entries(midnight, midnight + timedelta(days=1))
+        ends = [
+            comparable(e.end)
+            for _, e in listed
+            if e.start is not None
+            and e.end is not None
+            and comparable(e.start).date() == day
+            and (set(e.users) & set(users) if users else not e.users)
+        ]
+        return max(ends, default=datetime.combine(day, self.workday_start).astimezone())
+
+    def amend_time(self, item: Item, entry: TimeEntry, **changes: Any) -> TimeEntry:
+        """Change an entry: ``spent``, ``start``, ``end``, ``users`` or ``comment``; the rest stays."""
+        with self._context():
+            self._require_time_log(write=True)
+            self._require_entries()
+            unknown = set(changes) - {"spent", "start", "end", "users", "comment"}
+            if unknown:
+                raise TypeError(f"amend_time(): unknown {sorted(unknown)}")
+            if entry.id is None:
+                raise ValueError("amend_time(): the entry was never stored")
+            spent = changes.get("spent")
+            start, end = changes.get("start"), changes.get("end")
+            if spent is None:  # the times not given stay
+                start = start if "start" in changes else entry.start
+                end = end if "end" in changes else entry.end
+            elif "start" not in changes and "end" not in changes:  # spent alone keeps the start
+                start = entry.start
+            if start is None and end is None:  # an entry without times stays without: never invent them
+                duration, begin, finish = spent or entry.duration, None, None
+            else:
+                begin, finish = resolve(spent=spent, start=start, end=end, now=datetime.now(UTC))
+                duration = finish - begin
+            new = replace(
+                entry,
+                duration=duration,
+                start=begin,
+                end=finish,
+                users=tuple(changes.get("users", entry.users)),
+                comment=changes.get("comment", entry.comment),
+            )
+            return self._amend_time(item, entry, new)
+
+    def delete_time(self, item: Item, entry: TimeEntry) -> None:
+        with self._context():
+            self._require_time_log(write=True)
+            self._require_entries()
+            if entry.id is None:
+                raise ValueError("delete_time(): the entry was never stored")
+            self._delete_time(item, entry)
+
+    def time_entries(self, start: datetime, end: datetime) -> list[tuple[str, TimeEntry]]:
+        """``(item UID, entry)`` for every entry in the time range, by start: what ``sum_hours`` sums."""
+        with self._context():
+            target = self._require_time_log()
+            found = [(uid, e) for uid, e in target._time_entries(start, end) if uid is not None]
+            return sorted(found, key=lambda pair: _by_start(pair[1]))
+
+    def start_timer(self, task: Task, at: datetime | None = None) -> SyncTask:
+        """Start the timer on ``task``: ``X-PYCAL-TIMER-START`` until it is stopped."""
+        with self._context():
+            self._require_writable(task)
+            self._require_time_log()
+            if not isinstance(task, Task):
+                raise TypeError("start_timer(): the timer is for tasks")
+            if X_TIMER_START in task.component:
+                raise ValueError("start_timer(): a timer is already running on this task")
+            data = task.as_data()
+            _set_datetime(data.component, X_TIMER_START, (at or datetime.now(UTC)).astimezone(UTC))
+            result = self.save(data)
+            assert isinstance(result, SyncTask)
+            return result
+
+    def stop_timer(
+        self, task: Task, at: datetime | None = None, *, users: Iterable[str] = (), comment: str | None = None
+    ) -> tuple[SyncTask, TimeEntry]:
+        """Stop the timer: log the entry, then take the timer off the task."""
+        with self._context():
+            self._require_writable(task)
+            self._require_time_log(write=True)
+            now = datetime.now(UTC)
+            timer = running_timer(task, now)
+            if timer is None or timer.start is None:
+                raise ValueError("stop_timer(): no timer is running on this task")
+            begin, finish = resolve(spent=None, start=timer.start, end=at or now, now=now)
+            # Named after the task and the timer's start, so stopping it again after a failed save logs it once.
+            uid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{task.uid}#timer-{begin.isoformat()}"))
+            entry = TimeEntry(finish - begin, begin, finish, tuple(users), comment, logged=now, id=uid)
+            try:
+                entry = self._add_time(task, entry)
+            except AlreadyExistsError:
+                pass  # logged by an earlier stop_timer() that failed afterwards
+            data = task.as_data()
+            data.component.pop(X_TIMER_START, None)
+            result = self.save(data)
+            assert isinstance(result, SyncTask)
+            return result, entry
 
     @overload
     def move(

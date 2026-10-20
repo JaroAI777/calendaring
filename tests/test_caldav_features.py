@@ -44,6 +44,7 @@ def test_what_the_server_stores_is_unknown_without_hints() -> None:
         Feature.ALARMS,
         Feature.DATES,
         Feature.TIMEZONES,
+        Feature.TIME_LOG,
     ):
         assert unhinted.level(feature) is Support.UNKNOWN, feature
         assert known.level(feature) is Support.FULL, feature
@@ -82,6 +83,14 @@ def test_a_calendar_without_a_component_cannot_hold_it() -> None:
     table = collection_capabilities(hinted(save_load="full"), frozenset({Component.TASK}))
     assert table.level(Feature.COMPONENT_TASK) is Support.FULL
     assert table.level(Feature.COMPONENT_EVENT) is Support.UNSUPPORTED
+
+
+def test_a_calendar_without_events_has_nowhere_to_log_time() -> None:
+    tasks = collection_capabilities(hinted(save_load="full"), frozenset({Component.TASK}))
+    assert tasks.level(Feature.TIME_LOG) is Support.UNSUPPORTED
+    assert "time_log_collection" in (tasks[Feature.TIME_LOG].note or "")
+    both = collection_capabilities(hinted(save_load="full"), frozenset({Component.TASK, Component.EVENT}))
+    assert both.level(Feature.TIME_LOG) is Support.FULL
 
 
 def test_sync_token_is_used_only_where_deletions_are_reported_too() -> None:
