@@ -278,11 +278,15 @@ Notes from doing it:
   the suite: `FULL`, `TRACKER` (tasks only, mapped status and priority,
   assigned UIDs), `MINIMAL` (writable, most optional features left out, no
   collections of its own, so the suite borrows one that already holds an
-  item) and `FEED` (read-only). Between them the capability-aware tests run
-  both branches, except the supported branches of
-  `recurrence.edit-occurrence` and `task.complete-recurring` (below). Every
-  skip says why: a write test on the read-only profile after the write was
-  checked to raise, or a recurrence test where nothing recurs.
+  item) and `FEED` (read-only). Three more in the test module (events
+  only, tasks without a status, and a feed of tasks) reach the branches
+  these four left out, which a review found
+  ([issue 21](https://github.com/pycalendar/calendaring/issues/21)); CI
+  fails below 95 % branch coverage of the suite. The supported branches of
+  `recurrence.edit-occurrence`, `recurrence.edit-this-and-future` and
+  `task.complete-recurring` (below) are still not run. Every skip says why:
+  a write test on the read-only profile after the write was checked to
+  raise, or a recurrence test where nothing recurs.
 - A backend implements a handful of primitives (`_query`, `_fetch`,
   `_create`, `_update`, `_delete`); capability checks, loss policies,
   client-side filtering, change emulation, `move` emulation, `relatives` and

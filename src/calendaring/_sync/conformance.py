@@ -43,6 +43,7 @@ from .._mapping import differences, property_lines
 from ..capabilities import BACKEND_FEATURES, Feature, Support
 from ..errors import (
     AlreadyExistsError,
+    BackendError,
     CalendaringError,
     ConflictError,
     LossyWriteError,
@@ -519,7 +520,10 @@ class SyncConformance:
             return  # test_add_with_native_id checked that it raises
         if level(collection, Feature.IDENTITY_CLIENT_UID) is Support.UNSUPPORTED:
             pytest.skip("the backend assigns UIDs")
-        item = Task.new(summary="named and identified")
+        if not writable(collection):
+            return  # test_read_only_rejects_every_write checked the writes
+        kind = next(k for k in KINDS if holds(collection, k))
+        item = KINDS[kind][0].new(summary="named and identified")
         name = f"conformance-{uuid.uuid4().hex[:12]}.ics"
         stored = collection.add(item, native_id=name)
         assert stored.uid == item.uid
@@ -872,6 +876,12 @@ class SyncConformance:
 
     def test_complete_and_uncomplete(self, collection: Collection) -> None:
         task = self.add_task(collection, summary="to do")
+        if level(collection, Feature.TASK_STATUS) is Support.UNSUPPORTED:
+            before = snapshot(collection)
+            with pytest.raises(LossyWriteError):
+                task.complete()  # a backend without a status cannot store "completed"
+            assert snapshot(collection) == before
+            return
         task.complete()
         assert str(task.component["STATUS"]) == "COMPLETED"
         read = collection.reload(task)
@@ -1083,6 +1093,19 @@ class SyncConformance:
 
     def test_create_and_delete_collection(self, backend: Backend) -> None:
         before = [c.id for c in backend.collections()]
+        if backend.capabilities.level(Feature.CREATE_COLLECTION) is Support.UNKNOWN:
+            deletable = backend.capabilities.level(Feature.DELETE_COLLECTION) is not Support.UNSUPPORTED
+            attempted = None if deletable else self.left_behind(backend, "conformance-new")
+            if attempted is None:
+                try:
+                    attempted = backend.create_collection("conformance-new", components=(Component.TASK,))
+                except (UnsupportedError, BackendError):
+                    return  # unprobed, and it does not work here: attempted, as UNKNOWN promises
+                if deletable:
+                    self._made.append(attempted)
+            assert attempted.components == frozenset({Component.TASK})
+            assert attempted.id in [c.id for c in backend.collections()]
+            return
         if not backend.capabilities.supports(Feature.CREATE_COLLECTION):
             with pytest.raises(UnsupportedError) as info:
                 backend.create_collection("conformance-new")
