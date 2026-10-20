@@ -19,7 +19,7 @@ import calendaring_config
 from icalendar_searcher import Searcher
 
 from .._concurrency import agather
-from ..errors import AmbiguousError, CalendaringError, ConfigurationError, NotFoundError
+from ..errors import AmbiguousError, CalendaringError, ConfigurationError, NotFoundError, PartialResultError
 from ..loss import LossPolicy
 from ..types import MultiResult
 from .backend import AsyncBackend
@@ -137,6 +137,8 @@ class AsyncWorkspace:
         out: MultiResult[AsyncItem] = MultiResult()
         errors: dict[str, CalendaringError] = dict(listed.errors)
         for collection, result in zip(listed.items, results, strict=True):
+            if isinstance(result, PartialResultError):
+                out.items.extend(result.results)
             if isinstance(result, CalendaringError):
                 errors[collection.id] = result
             else:

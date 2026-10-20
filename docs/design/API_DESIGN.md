@@ -1165,6 +1165,7 @@ CalendaringError
 ├── UnsupportedError              # carries .feature
 │   └── LossyWriteError           # carries .losses; raised before anything is sent
 ├── InvalidDataError              # the backend rejected the data, or it does not parse; also a ValueError
+│   └── PartialResultError        # a read left out stored objects it could not use; .results, .broken
 ├── RateLimitError                # carries .retry_after: float | None
 ├── VerificationError             # verify=True: written, but stored differently; carries .differences
 └── BackendError                  # anything else from the backend or transport
@@ -1197,7 +1198,23 @@ CalendaringWarning
   reload the item. It is still a `ConflictError`, as `AlreadyExistsError`
   is, because all three are a failed precondition; a handler that reloads
   on `ConflictError` should catch the subclasses first.
-- Fan-out ([§2.1 Workspace](#21-workspace)) does not raise; `MultiResult.raise_for_errors()` raises an `ExceptionGroup` of these.
+- **One bad stored object does not hide the rest.** A read that lists
+  (`search()`, `iter_search()` once exhausted, the listing shorthands,
+  `changes()`, `relatives()`, and `get(uid)` where the UID is not found)
+  leaves out an
+  object that does not parse, or that the searcher cannot match (two
+  masters for one UID), and then raises `PartialResultError`.  `.results`
+  is what the call would have returned from the rest (for `changes()` the
+  `ChangeSet`, whose token is good; for `iter_search()` nothing, since it
+  yielded them already), and `.broken` lists the objects left
+  out (`BrokenObject`: native id, etag, error, and the bytes as read where
+  the backend has them, to repair the object from).  A broken object is
+  never reported as deleted.  `get_by_native_id()` of one raises
+  `InvalidDataError`.  Raising rather than warning means no caller misses
+  it; a caller that can live with the gap takes `.results`.  The listing
+  primitives return a `BrokenObject` in place of a `StoredObject` rather
+  than raising, so the backend decides per object.
+- Fan-out ([§2.1 Workspace](#21-workspace)) does not raise; `MultiResult.raise_for_errors()` raises an `ExceptionGroup` of these.  `Workspace.search()` keeps a `PartialResultError`'s `.results` among the items, and the error among the errors.
 
 caldav's errors map one to one where they overlap:
 `NotFoundError` → `NotFoundError`, `ETagMismatchError` and

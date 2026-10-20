@@ -10,7 +10,7 @@ application's own tests.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from typing import Any, ClassVar
 
 import icalendar
@@ -18,10 +18,10 @@ from icalendar_searcher import Searcher
 
 from .._memory_store import FULL, MemoryCalendar, MemoryObject, MemoryStore, Profile
 from ..capabilities import Capabilities, Feature, Support
-from ..errors import ConflictError
+from ..errors import ConflictError, InvalidDataError
 from ..items import Item
 from ..loss import LossPolicy
-from ..types import Component, StoredObject
+from ..types import BrokenObject, Component, StoredObject
 from .backend import Backend
 from .collection import Collection
 
@@ -30,6 +30,13 @@ __all__ = ["MemoryBackend", "MemoryCollection"]
 
 def _stored(obj: MemoryObject, *, written: bool = False) -> StoredObject:
     return StoredObject(obj.native_id, obj.etag, obj.calendar, None if written else obj.data, obj)
+
+
+def _listed(obj: MemoryObject) -> StoredObject | BrokenObject:
+    try:
+        return _stored(obj)
+    except InvalidDataError as exc:
+        return BrokenObject(obj.native_id, obj.etag, obj.data, exc)
 
 
 class MemoryCollection(Collection):
@@ -47,8 +54,11 @@ class MemoryCollection(Collection):
             native=store,
         )
 
-    def _query(self, searcher: Searcher | None) -> list[StoredObject]:
-        return [_stored(o) for o in self.store.objects.values()]
+    def _query(self, searcher: Searcher | None) -> Sequence[StoredObject | BrokenObject]:
+        return [_listed(o) for o in self.store.objects.values()]
+
+    def _fetch_many(self, native_ids: Iterable[str]) -> list[StoredObject | BrokenObject]:
+        return [_listed(self.store.objects[n]) for n in native_ids if n in self.store.objects]
 
     def _fetch(self, native_id: str) -> StoredObject:
         return _stored(self.store.get(native_id))

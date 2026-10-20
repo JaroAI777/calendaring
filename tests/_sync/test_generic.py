@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from icalendar_searcher import Searcher
 
 from calendaring import (
     Backend,
@@ -13,13 +14,17 @@ from calendaring import (
     SyncTask,
     Workspace,
     BackendError,
+    BrokenObject,
+    Component,
     ConfigurationError,
     ConflictError,
     Event,
     Feature,
+    InvalidDataError,
     LossyWriteWarning,
     MultiResult,
     NotFoundError,
+    PartialResultError,
     Support,
     SyncTokenError,
     Task,
@@ -28,6 +33,7 @@ from calendaring import (
 )
 from calendaring.loss import WARN
 from calendaring.memory import TRACKER, MemoryBackend, MemoryCollection, MemoryObject
+from calendaring.types import StoredObject
 
 
 def at(day: int, hour: int = 12) -> datetime:
@@ -240,6 +246,116 @@ def test_a_token_from_another_backend_is_refused() -> None:
     twin = MemoryBackend(id="work").collection("default")
     with pytest.raises(SyncTokenError):
         twin.changes(token)
+
+
+BAD_TODO = (  # DUE:2026-10-20 is not a valid DATE; some client wrote it
+    b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//some client//EN\r\nBEGIN:VTODO\r\nUID:from-phone\r\n"
+    b"DTSTAMP:20261001T000000Z\r\nSUMMARY:buy milk\r\nDUE:2026-10-20\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+)
+
+TWO_MASTERS = (  # parses, but is no recurrence set: the searcher cannot match it
+    b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n"
+    b"BEGIN:VEVENT\r\nUID:twice\r\nDTSTAMP:20261001T000000Z\r\nDTSTART:20261105T090000Z\r\n"
+    b"RRULE:FREQ=DAILY;COUNT=2\r\nEND:VEVENT\r\n"
+    b"BEGIN:VEVENT\r\nUID:twice\r\nDTSTAMP:20261001T000000Z\r\nDTSTART:20261106T090000Z\r\n"
+    b"RRULE:FREQ=DAILY;COUNT=2\r\nEND:VEVENT\r\n"
+    b"END:VCALENDAR\r\n"
+)
+
+
+def test_an_object_that_does_not_parse_gives_partial_results() -> None:
+    collection = MemoryBackend().collection("default")
+    assert isinstance(collection, MemoryCollection)
+    good = collection.add_task(summary="good task")
+    bad = collection.store.put(BAD_TODO)
+    for call in (collection.search, collection.tasks):
+        with pytest.raises(PartialResultError) as info:
+            call()
+        assert [i.uid for i in info.value.results] == [good.uid]
+        assert [(b.native_id, b.wire) for b in info.value.broken] == [(bad, BAD_TODO)]
+        assert info.value.collection_id == "default"
+    streamed = []
+
+    def drain() -> None:
+        for item in collection.iter_search():
+            streamed.append(item)
+
+    with pytest.raises(PartialResultError) as info:
+        drain()
+    assert [i.uid for i in streamed] == [good.uid]
+    assert info.value.results == [], "iter_search() already gave them; it keeps none"
+    assert (collection.get(good.uid)).native_id == good.native_id
+    with pytest.raises(PartialResultError):
+        collection.get("not-there")
+    with pytest.raises(PartialResultError) as info:
+        collection.changes()
+    assert [i.uid for i in info.value.results.changed] == [good.uid]
+    assert info.value.results.deleted == []
+    [broken] = info.value.broken
+    assert (broken.native_id, broken.etag, broken.wire) == (bad, collection.store.objects[bad].etag, BAD_TODO)
+    quiet = collection.changes(info.value.results.token)
+    assert (quiet.changed, quiet.deleted) == ([], [])
+    with pytest.raises(InvalidDataError):
+        collection.get_by_native_id(bad)
+    collection.add_task(summary="added after")  # the store still checks UIDs past the broken one
+
+
+class ListsWithoutEtags(MemoryCollection):
+    """Lists a broken object without its etag, as a backend that reads etags from the content would."""
+
+    def _query(self, searcher: Searcher | None) -> list[StoredObject | BrokenObject]:
+        out = list(super()._query(searcher))
+        return [BrokenObject(s.native_id, None, s.wire, s.error) if isinstance(s, BrokenObject) else s for s in out]
+
+    _list_etags = Collection._list_etags
+
+
+def test_a_broken_object_is_never_reported_deleted() -> None:
+    class Backend(MemoryBackend):
+        collection_class = ListsWithoutEtags
+
+    collection = Backend().collection("default")
+    assert isinstance(collection, MemoryCollection)
+    collection.add_task(summary="good")
+    bad = collection.store.put(BAD_TODO)
+    with pytest.raises(PartialResultError) as info:
+        collection.changes()
+    with pytest.raises(PartialResultError) as again:
+        collection.changes(known={bad: "an etag from before"})
+    assert again.value.results.deleted == []
+    assert bad not in (collection.changes(info.value.results.token)).deleted
+
+
+def test_relatives_get_past_a_broken_object() -> None:
+    backend = MemoryBackend()
+    collection = backend.collection("default")
+    other = backend.create_collection("other", components=[Component.TASK])
+    assert isinstance(collection, MemoryCollection)
+    parent = other.add_task(summary="parent")
+    child = collection.add_task(summary="child", related_to=parent.uid)
+    collection.store.put(BAD_TODO)
+    with pytest.raises(PartialResultError) as info:
+        child.relatives()
+    assert [r.uid for r in info.value.results] == [parent.uid]
+
+
+def test_an_object_the_searcher_cannot_match_gives_partial_results() -> None:
+    work = MemoryBackend(id="work")
+    home = MemoryBackend(id="home")
+    collection = work.collection("default")
+    assert isinstance(collection, MemoryCollection)
+    collection.add_event(summary="unrelated", start=at(6))
+    [home_default] = home.collections()
+    home_default.delete_collection()  # so that only work's collection is "default"
+    (home.create_collection("personal")).add_event(summary="dentist", start=at(7))
+    odd = collection.store.put(TWO_MASTERS)
+    with pytest.raises(PartialResultError) as info:
+        collection.events()
+    assert [str(i.component["SUMMARY"]) for i in info.value.results] == ["unrelated"]
+    assert [b.native_id for b in info.value.broken] == [odd]
+    found = Workspace([work, home]).search()
+    assert sorted(str(i.component["SUMMARY"]) for i in found.items) == ["dentist", "unrelated"]
+    assert isinstance(found.errors["default"], PartialResultError)
 
 
 class DefaultTokenScope(MemoryCollection):

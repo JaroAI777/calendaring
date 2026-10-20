@@ -46,6 +46,7 @@ from ..errors import (
     LossyWriteError,
     LossyWriteWarning,
     NotFoundError,
+    PartialResultError,
     SyncTokenError,
     UnsupportedError,
 )
@@ -97,9 +98,17 @@ def level(collection: AsyncCollection, feature: Feature) -> Support:
     return collection.capabilities.level(feature)
 
 
+async def readable(collection: AsyncCollection) -> tuple[list[AsyncItem], set[str]]:
+    """What a borrowed collection holds that can be read, and the native ids of what cannot."""
+    try:
+        return await collection.search(), set()
+    except PartialResultError as exc:
+        return list(exc.results), {b.native_id for b in exc.broken}
+
+
 async def snapshot(collection: AsyncCollection) -> list[tuple[str | None, str | None]]:
-    """What is stored, as (native_id, etag) pairs: unchanged means no write happened."""
-    return sorted((i.native_id, i.etag) for i in await collection.search())
+    """What is stored and readable, as (native_id, etag) pairs: unchanged means no write happened."""
+    return sorted((i.native_id, i.etag) for i in (await readable(collection))[0])
 
 
 # One item type per component: the data class, the add_ shorthand, the
@@ -217,7 +226,8 @@ class AsyncConformance:
 
     async def borrow(self, collection: AsyncCollection) -> AsyncCollection:
         """Use a collection the suite may not delete, and note what it writes there, to delete only that."""
-        before = {i.native_id for i in await collection.search()}
+        items, broken = await readable(collection)
+        before: set[str | None] = {i.native_id for i in items} | set(broken)
         written: set[str] = set()  # native ids and UIDs of what the suite created
         create = collection._create
 
@@ -259,7 +269,8 @@ class AsyncConformance:
         for borrowed, before, written in self._borrowed:
             if not writable(borrowed):
                 continue
-            for native_id in {i.native_id for i in await borrowed.search() if self.wrote(i, before, written)}:
+            items, _ = await readable(borrowed)
+            for native_id in {i.native_id for i in items if self.wrote(i, before, written)}:
                 assert native_id is not None
                 await borrowed.delete(native_id)
 

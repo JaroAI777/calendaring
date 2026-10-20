@@ -17,6 +17,7 @@ import pytest
 from icalendar_searcher import Searcher
 
 from calendaring import AsyncBackend, AsyncCollection, AsyncItem, Feature, Item, Support, Task
+from calendaring._async.conformance import snapshot
 from calendaring.memory import (
     FEED,
     FULL,
@@ -98,6 +99,18 @@ class TestTidyingUp:
         await shared.add_task(summary="the user's, from their phone")
         await suite.tidy_up(backend)
         assert [str(i.component["SUMMARY"]) for i in await shared.search()] == ["the user's, from their phone"]
+
+    async def test_a_broken_object_in_a_borrowed_collection_is_left_alone(self) -> None:
+        backend = sharing(MINIMAL)
+        bad = backend.store.calendars["default"].put(
+            b"BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nDUE:2026-10-20\r\nEND:VTODO\r\n"
+        )
+        suite = self.suite()
+        collection = await suite.open_collection(backend)
+        assert await snapshot(collection) == []
+        await collection.add_task(summary="the suite's")
+        await suite.tidy_up(backend)
+        assert list(backend.store.calendars["default"].objects) == [bad]
 
     async def test_a_borrowed_collection_keeps_its_name(self) -> None:
         backend = sharing(MINIMAL)

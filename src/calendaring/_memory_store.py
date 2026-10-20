@@ -17,7 +17,7 @@ from typing import Any
 import icalendar
 
 from .capabilities import BACKEND_FEATURES, Feature, Support
-from .errors import AlreadyExistsError, ConflictError, NotFoundError
+from .errors import AlreadyExistsError, ConflictError, InvalidDataError, NotFoundError
 from .items import _items_of, _parse
 from .types import Component
 
@@ -157,6 +157,14 @@ class MemoryObject:
     def calendar(self) -> icalendar.Calendar:
         return _parse(self.data)
 
+    @property
+    def parses(self) -> bool:
+        try:
+            _ = self.uid
+        except InvalidDataError:
+            return False
+        return True
+
     @cached_property  # every add compares it with every stored object's
     def uid(self) -> str:
         return str(_items_of(self.calendar)[0]["UID"])
@@ -191,7 +199,7 @@ class MemoryCalendar:
         if assign_uid:
             data = self._with_uid(data, f"{self.store.next()}@memory.invalid")
         uid = str(_items_of(_parse(data))[0]["UID"])
-        if any(o.uid == uid for o in self.objects.values()):
+        if any(o.uid == uid for o in self.objects.values() if o.parses):
             raise AlreadyExistsError(f"UID {uid!r} is taken", taken="uid")
         return self.get(self.put(data, native_id))
 
