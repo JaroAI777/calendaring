@@ -46,6 +46,16 @@ def test_caldav_errors_translate() -> None:
     assert type(_translate(dav_error.DAVError(url="x"))) is BackendError
 
 
+def test_a_401_is_authentication_and_a_403_authorization() -> None:
+    from caldav.lib import error as dav_error
+
+    from calendaring._caldav_io import _translate
+    from calendaring.errors import AuthenticationError, AuthorizationError
+
+    assert type(_translate(dav_error.AuthorizationError(url="x", status=401))) is AuthenticationError
+    assert type(_translate(dav_error.AuthorizationError(url="x", status=403))) is AuthorizationError
+
+
 def test_a_refused_create_says_what_was_taken() -> None:
     from caldav.lib import error as dav_error
 
@@ -55,6 +65,9 @@ def test_a_refused_create_says_what_was_taken() -> None:
     with pytest.raises(AlreadyExistsError) as uid, creating():
         raise dav_error.UidConflictError(url="x")
     assert uid.value.taken == "uid"
+    with pytest.raises(AlreadyExistsError) as found, creating():  # caldav's own UID search found it
+        raise dav_error.UidConflictConsistencyError(url="x")
+    assert found.value.taken == "uid"
     with pytest.raises(AlreadyExistsError) as name, creating():
         raise dav_error.ConsistencyError("If-None-Match failed")
     assert name.value.taken == "native_id"

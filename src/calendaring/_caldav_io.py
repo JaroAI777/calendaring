@@ -101,17 +101,16 @@ def translated() -> Iterator[None]:
 
 def _translate(exc: dav_error.DAVError) -> CalendaringError:
     message = str(exc)
-    if VALID_SYNC_TOKEN in getattr(exc, "preconditions", ()):
+    if VALID_SYNC_TOKEN in exc.preconditions:
         return SyncTokenError(f"the server no longer honours the sync token: {message}")
     if isinstance(exc, dav_error.NotFoundError):
         return NotFoundError(message)
     if isinstance(exc, (dav_error.ETagMismatchError, dav_error.ScheduleTagMismatchError)):
         return ConflictError(message)
     if isinstance(exc, dav_error.AuthorizationError):
-        status = getattr(exc, "status", None) or getattr(getattr(exc, "response", None), "status", None)
-        return (AuthenticationError if status == 401 else AuthorizationError)(message)
+        return (AuthenticationError if exc.status == 401 else AuthorizationError)(message)
     if isinstance(exc, dav_error.RateLimitError):
-        return RateLimitError(message, retry_after=getattr(exc, "retry_after_seconds", None))
+        return RateLimitError(message, retry_after=exc.retry_after_seconds)
     return BackendError(message)
 
 
@@ -150,7 +149,7 @@ def creating() -> Iterator[None]:
         yield
     except dav_error.UidConflictError as exc:  # another object holds the UID (RFC 4791 §5.3.2.1)
         raise AlreadyExistsError(str(exc), taken="uid") from exc
-    except dav_error.ConsistencyError as exc:  # If-None-Match failed, or caldav's search found it
+    except dav_error.ConsistencyError as exc:  # If-None-Match failed: something is at that URL
         raise AlreadyExistsError(str(exc), taken="native_id") from exc
 
 
