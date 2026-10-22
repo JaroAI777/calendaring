@@ -1,0 +1,1 @@
+One stored item that cannot be read no longer makes a whole collection unreadable.  A search, ``get()``, ``relatives()`` or ``changes()`` that has to leave items out raises ``PartialResultError``, which carries what could be read and the raw data of what could not, so it can be repaired.

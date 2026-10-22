@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from icalendar_searcher import Searcher
 
 from calendaring import (
     AsyncBackend,
@@ -13,19 +14,26 @@ from calendaring import (
     AsyncTask,
     AsyncWorkspace,
     BackendError,
+    BrokenObject,
+    Component,
     ConfigurationError,
+    ConflictError,
     Event,
     Feature,
+    InvalidDataError,
     LossyWriteWarning,
     MultiResult,
     NotFoundError,
+    PartialResultError,
     Support,
+    SyncTokenError,
     Task,
     UnsupportedError,
     VerificationError,
 )
 from calendaring.loss import WARN
 from calendaring.memory import TRACKER, AsyncMemoryBackend, AsyncMemoryCollection, MemoryObject
+from calendaring.types import StoredObject
 
 
 def at(day: int, hour: int = 12) -> datetime:
@@ -193,3 +201,176 @@ async def test_workspace_defaults_stay_the_workspace_s() -> None:
     assert backend.verify is None, "the backend's own setting is untouched"
     with pytest.raises(VerificationError):
         await (await backend.collection("default")).add_task(summary="x", categories=["a"])
+
+
+async def test_move_between_backends_checks_the_etag_before_copying() -> None:
+    source = await AsyncMemoryBackend(id="source").collection("default")
+    target = await AsyncMemoryBackend(TRACKER, id="tracker").collection("default")
+    task = await source.add_task(summary="file taxes")
+    other = await source.get(task.uid)
+    other.component["SUMMARY"] = "file taxes (by 31 Oct)"
+    await other.save()
+    for _ in range(2):
+        with pytest.raises(ConflictError):
+            await source.move(task, target)
+    assert await target.search() == [], "a move refused for a stale etag left a copy behind"
+
+
+class LosesTheRace(AsyncMemoryCollection):
+    """Another client edits the item between the copy and the delete."""
+
+    async def _delete(self, native_id: str, *, etag: str | None) -> None:
+        raise ConflictError(f"{native_id!r} changed since it was read")
+
+
+async def test_a_move_that_loses_the_race_removes_its_copy() -> None:
+    class Backend(AsyncMemoryBackend):
+        collection_class = LosesTheRace
+
+    source = await Backend(id="source").collection("default")
+    target = await AsyncMemoryBackend(id="target").collection("default")
+    task = await source.add_task(summary="x")
+    with pytest.raises(ConflictError):
+        await source.move(task, target)
+    assert await target.search() == []
+
+
+async def test_a_token_from_another_backend_is_refused() -> None:
+    work = await AsyncMemoryBackend(id="work").collection("default")
+    home = await AsyncMemoryBackend(id="home").collection("default")
+    for summary in ("w1", "w2"):
+        await work.add_task(summary=summary)
+    token = (await work.changes()).token
+    with pytest.raises(SyncTokenError):
+        await home.changes(token)
+    twin = await AsyncMemoryBackend(id="work").collection("default")
+    with pytest.raises(SyncTokenError):
+        await twin.changes(token)
+
+
+BAD_TODO = (  # DUE:2026-10-20 is not a valid DATE; some client wrote it
+    b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//some client//EN\r\nBEGIN:VTODO\r\nUID:from-phone\r\n"
+    b"DTSTAMP:20261001T000000Z\r\nSUMMARY:buy milk\r\nDUE:2026-10-20\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+)
+
+TWO_MASTERS = (  # parses, but is no recurrence set: the searcher cannot match it
+    b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\n"
+    b"BEGIN:VEVENT\r\nUID:twice\r\nDTSTAMP:20261001T000000Z\r\nDTSTART:20261105T090000Z\r\n"
+    b"RRULE:FREQ=DAILY;COUNT=2\r\nEND:VEVENT\r\n"
+    b"BEGIN:VEVENT\r\nUID:twice\r\nDTSTAMP:20261001T000000Z\r\nDTSTART:20261106T090000Z\r\n"
+    b"RRULE:FREQ=DAILY;COUNT=2\r\nEND:VEVENT\r\n"
+    b"END:VCALENDAR\r\n"
+)
+
+
+async def test_an_object_that_does_not_parse_gives_partial_results() -> None:
+    collection = await AsyncMemoryBackend().collection("default")
+    assert isinstance(collection, AsyncMemoryCollection)
+    good = await collection.add_task(summary="good task")
+    bad = collection.store.put(BAD_TODO)
+    for call in (collection.search, collection.tasks):
+        with pytest.raises(PartialResultError) as info:
+            await call()
+        assert [i.uid for i in info.value.results] == [good.uid]
+        assert [(b.native_id, b.wire) for b in info.value.broken] == [(bad, BAD_TODO)]
+        assert info.value.collection_id == "default"
+    streamed = []
+
+    async def drain() -> None:
+        async for item in collection.iter_search():
+            streamed.append(item)
+
+    with pytest.raises(PartialResultError) as info:
+        await drain()
+    assert [i.uid for i in streamed] == [good.uid]
+    assert info.value.results == [], "iter_search() already gave them; it keeps none"
+    assert (await collection.get(good.uid)).native_id == good.native_id
+    with pytest.raises(PartialResultError):
+        await collection.get("not-there")
+    with pytest.raises(PartialResultError) as info:
+        await collection.changes()
+    assert [i.uid for i in info.value.results.changed] == [good.uid]
+    assert info.value.results.deleted == []
+    [broken] = info.value.broken
+    assert (broken.native_id, broken.etag, broken.wire) == (bad, collection.store.objects[bad].etag, BAD_TODO)
+    quiet = await collection.changes(info.value.results.token)
+    assert (quiet.changed, quiet.deleted) == ([], [])
+    with pytest.raises(InvalidDataError):
+        await collection.get_by_native_id(bad)
+    await collection.add_task(summary="added after")  # the store still checks UIDs past the broken one
+
+
+class ListsWithoutEtags(AsyncMemoryCollection):
+    """Lists a broken object without its etag, as a backend that reads etags from the content would."""
+
+    async def _query(self, searcher: Searcher | None) -> list[StoredObject | BrokenObject]:
+        out = list(await super()._query(searcher))
+        return [BrokenObject(s.native_id, None, s.wire, s.error) if isinstance(s, BrokenObject) else s for s in out]
+
+    _list_etags = AsyncCollection._list_etags
+
+
+async def test_a_broken_object_is_never_reported_deleted() -> None:
+    class Backend(AsyncMemoryBackend):
+        collection_class = ListsWithoutEtags
+
+    collection = await Backend().collection("default")
+    assert isinstance(collection, AsyncMemoryCollection)
+    await collection.add_task(summary="good")
+    bad = collection.store.put(BAD_TODO)
+    with pytest.raises(PartialResultError) as info:
+        await collection.changes()
+    with pytest.raises(PartialResultError) as again:
+        await collection.changes(known={bad: "an etag from before"})
+    assert again.value.results.deleted == []
+    assert bad not in (await collection.changes(info.value.results.token)).deleted
+
+
+async def test_relatives_get_past_a_broken_object() -> None:
+    backend = AsyncMemoryBackend()
+    collection = await backend.collection("default")
+    other = await backend.create_collection("other", components=[Component.TASK])
+    assert isinstance(collection, AsyncMemoryCollection)
+    parent = await other.add_task(summary="parent")
+    child = await collection.add_task(summary="child", related_to=parent.uid)
+    collection.store.put(BAD_TODO)
+    with pytest.raises(PartialResultError) as info:
+        await child.relatives()
+    assert [r.uid for r in info.value.results] == [parent.uid]
+
+
+async def test_an_object_the_searcher_cannot_match_gives_partial_results() -> None:
+    work = AsyncMemoryBackend(id="work")
+    home = AsyncMemoryBackend(id="home")
+    collection = await work.collection("default")
+    assert isinstance(collection, AsyncMemoryCollection)
+    await collection.add_event(summary="unrelated", start=at(6))
+    [home_default] = await home.collections()
+    await home_default.delete_collection()  # so that only work's collection is "default"
+    await (await home.create_collection("personal")).add_event(summary="dentist", start=at(7))
+    odd = collection.store.put(TWO_MASTERS)
+    with pytest.raises(PartialResultError) as info:
+        await collection.events()
+    assert [str(i.component["SUMMARY"]) for i in info.value.results] == ["unrelated"]
+    assert [b.native_id for b in info.value.broken] == [odd]
+    found = await AsyncWorkspace([work, home]).search()
+    assert sorted(str(i.component["SUMMARY"]) for i in found.items) == ["dentist", "unrelated"]
+    assert isinstance(found.errors["default"], PartialResultError)
+
+
+class DefaultTokenScope(AsyncMemoryCollection):
+    def _token_scope(self) -> str:
+        return AsyncCollection._token_scope(self)
+
+
+async def test_the_default_token_scope_is_kind_backend_and_collection() -> None:
+    class Backend(AsyncMemoryBackend):
+        collection_class = DefaultTokenScope
+
+    work = await Backend(id="work").collection("default")
+    assert work._token_scope() == "memory:work:default"
+    token = (await work.changes()).token
+    with pytest.raises(SyncTokenError):
+        await (await Backend(id="home").collection("default")).changes(token)
+    # Another store under the same label: the default cannot tell them apart.
+    await (await Backend(id="work").collection("default")).changes(token)

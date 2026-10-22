@@ -14,8 +14,8 @@ import binascii
 import copy
 import json
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Generator, Iterable, Mapping
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Generator, Iterable, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, overload
 
@@ -23,12 +23,21 @@ import icalendar
 import recurring_ical_events
 from icalendar_searcher import Searcher
 
-from .._mapping import Change, differences, plan_losses
+from .._mapping import Change, differences, plan_calendar_losses, plan_losses
 from ..capabilities import BACKEND_FEATURES, Capabilities, Feature, Support
-from ..errors import CalendaringError, NotFoundError, SyncTokenError, UnsupportedError, VerificationError
+from ..errors import (
+    CalendaringError,
+    ConflictError,
+    InvalidDataError,
+    NotFoundError,
+    PartialResultError,
+    SyncTokenError,
+    UnsupportedError,
+    VerificationError,
+)
 from ..items import Event, Item, Journal, Task, _items_of, _parse, split_stored
 from ..loss import RAISE, LossPolicy
-from ..types import ChangeSet, Component, Scope, StoredObject, SyncToken
+from ..types import BrokenObject, ChangeSet, Component, Scope, StoredObject, SyncToken
 from .items import BOUND, AsyncEvent, AsyncItem, AsyncJournal, AsyncTask
 
 if TYPE_CHECKING:
@@ -80,8 +89,13 @@ class AsyncCollection(ABC):
     # === primitives a backend implements ===============================
 
     @abstractmethod
-    async def _query(self, searcher: Searcher | None) -> list[StoredObject]:
-        """The stored objects that may match: over-matching is fine, under-matching is a bug (A3)."""
+    async def _query(self, searcher: Searcher | None) -> Sequence[StoredObject | BrokenObject]:
+        """The stored objects that may match: over-matching is fine, under-matching is a bug (A3).
+
+        An object that does not parse is returned as a ``BrokenObject``, so
+        one bad object leaves the rest readable.  The same goes for every
+        primitive that lists: ``_iter_query``, ``_fetch_many``, ``_changes``.
+        """
 
     @abstractmethod
     async def _fetch(self, native_id: str) -> StoredObject:
@@ -106,35 +120,50 @@ class AsyncCollection(ABC):
     async def _delete(self, native_id: str, *, etag: str | None) -> None:
         """Remove a stored object; ``ConflictError`` if ``etag`` is given and no longer matches."""
 
-    async def _iter_query(self, searcher: Searcher | None) -> AsyncIterator[StoredObject]:
+    async def _iter_query(self, searcher: Searcher | None) -> AsyncIterator[StoredObject | BrokenObject]:
         """Override to stream pages; the default yields what ``_query`` returns."""
         for stored in await self._query(searcher):
             yield stored
 
     async def _find_uid(self, uid: str) -> StoredObject:
-        """Override where the backend can look a UID up; the default reads everything."""
+        """Override where the backend can look a UID up; the default reads everything.
+
+        ``PartialResultError`` if the UID is not found but some object could not be read.
+        """
+        broken = []
         for stored in await self._query(None):
-            if any(str(c.get("UID")) == uid for c in _items_of(stored.calendar)):
+            if isinstance(stored, BrokenObject):
+                broken.append(stored)
+            elif any(str(c.get("UID")) == uid for c in _items_of(stored.calendar)):
                 return stored
+        if broken:
+            raise PartialResultError([], broken, f"no readable item with UID {uid!r}; {len(broken)} unreadable")
         raise NotFoundError(f"no item with UID {uid!r}")
 
     async def _list_etags(self) -> dict[str, str]:
         """``{native_id: etag}`` for every stored object; override where it can be listed without content."""
-        return {s.native_id: s.etag for s in await self._query(None)}
+        # A broken object listed without an etag is still there: never report it deleted.
+        return {s.native_id: s.etag or "" for s in await self._query(None)}
 
-    async def _fetch_many(self, native_ids: Iterable[str]) -> list[StoredObject]:
-        """Override with a bulk fetch (CalDAV ``calendar-multiget``); objects gone meanwhile are left out."""
-        out = []
+    async def _fetch_many(self, native_ids: Iterable[str]) -> Sequence[StoredObject | BrokenObject]:
+        """Override with a bulk fetch (CalDAV ``calendar-multiget``); objects gone meanwhile are left out.
+
+        The default cannot keep the bytes of an object that does not parse;
+        a backend that has them overrides this to return them.
+        """
+        out: list[StoredObject | BrokenObject] = []
         for native_id in native_ids:
             try:
                 out.append(await self._fetch(native_id))
             except NotFoundError:
                 pass
+            except InvalidDataError as exc:
+                out.append(BrokenObject(native_id, None, None, exc))
         return out
 
     async def _changes(
         self, token: SyncToken | None, known: Mapping[str, str] | None
-    ) -> tuple[list[StoredObject], list[str], SyncToken]:
+    ) -> tuple[Sequence[StoredObject | BrokenObject], list[str], SyncToken]:
         """Override with a native change feed; the default diffs an etag listing (``EMULATED``)."""
         if token is not None:
             base = self._decode_token(token)
@@ -143,7 +172,11 @@ class AsyncCollection(ABC):
         current = await self._list_etags()
         changed = [n for n, etag in current.items() if base.get(n) != etag]
         deleted = sorted(n for n in base if n not in current)
-        return await self._fetch_many(changed), deleted, self._encode_token(current)
+        fetched = await self._fetch_many(changed)
+        for stored in fetched:
+            if isinstance(stored, BrokenObject) and stored.etag is None:
+                stored.etag = current[stored.native_id] or None
+        return fetched, deleted, self._encode_token(current)
 
     async def _move(self, item: Item, target: AsyncCollection) -> StoredObject | None:
         """Override with the backend's own move; ``None`` means add to the target, then delete here."""
@@ -216,8 +249,18 @@ class AsyncCollection(ABC):
                 return bool(setting)
         return False
 
+    def _token_scope(self) -> str:
+        """What an emulated token is bound to: by default the backend's kind and id, and the collection's id.
+
+        The backend id is the caller's label for it, so two configurations
+        that give different stores the same id accept each other's tokens,
+        and renaming a backend invalidates its tokens.  A backend that has a
+        locator (a directory, a URL) overrides this with it.
+        """
+        return f"{self._backend.kind}:{self.backend_id}:{self.id}"
+
     def _encode_token(self, etags: Mapping[str, str]) -> SyncToken:
-        raw = json.dumps({"collection": self.id, "etags": etags}, sort_keys=True).encode()
+        raw = json.dumps({"collection": self._token_scope(), "etags": etags}, sort_keys=True).encode()
         return SyncToken(base64.urlsafe_b64encode(raw).decode())
 
     def _decode_token(self, token: SyncToken) -> dict[str, str]:
@@ -227,7 +270,7 @@ class AsyncCollection(ABC):
             issued_by = data["collection"]
         except (binascii.Error, ValueError, TypeError, KeyError) as exc:
             raise SyncTokenError(f"not a token this collection issued: {token!r}") from exc
-        if issued_by != self.id or not isinstance(etags, dict):
+        if issued_by != self._token_scope() or not isinstance(etags, dict):
             raise SyncTokenError(f"a token from another collection: {issued_by!r}")
         return etags
 
@@ -270,6 +313,7 @@ class AsyncCollection(ABC):
         else:
             calendar = copy.deepcopy(item.icalendar)
         changes = [change for c in _items_of(calendar) for change in self._plan_losses(c)]
+        changes += plan_calendar_losses(calendar, self.capabilities)
         losses = [loss_ for loss_, _ in changes]
         if losses and wire is not None:
             raise UnsupportedError(Feature.WRITE_WIRE, "wire= bytes the backend cannot store as they are")
@@ -291,12 +335,26 @@ class AsyncCollection(ABC):
             raise TypeError("give a Searcher or keyword filters, not both")
         return searcher if searcher is not None else Searcher(**filters)
 
-    def _matches(self, searcher: Searcher, stored: StoredObject) -> list[AsyncItem]:
-        """Run the client-side filter over one stored object (A3); expand into occurrences if asked."""
+    def _matches(
+        self, searcher: Searcher, stored: StoredObject | BrokenObject, broken: list[BrokenObject]
+    ) -> list[AsyncItem]:
+        """Run the client-side filter over one stored object (A3); expand into occurrences if asked.
+
+        An object that is broken, or that the searcher cannot match, goes to ``broken``.
+        """
+        if isinstance(stored, BrokenObject):
+            broken.append(stored)
+            return []
         out: list[AsyncItem] = []
         parts = split_stored(stored.calendar)
         for part in parts:
-            matched = searcher.check_component(part)
+            try:
+                matched = searcher.check_component(part)
+            except ValueError as exc:  # icalendar-searcher on what is no valid recurrence set
+                error = InvalidDataError(f"the searcher cannot match it: {exc}")
+                error.__cause__ = exc
+                broken.append(BrokenObject(stored.native_id, stored.etag, stored.wire, error))
+                return []
             if not matched:
                 continue
             components = [c for c in matched if c.name != "VTIMEZONE"]
@@ -349,20 +407,31 @@ class AsyncCollection(ABC):
     async def search(self, searcher: Searcher | None = None, **filters: Any) -> list[AsyncItem]:
         with self._context():
             searcher = self._searcher(searcher, filters)
-            items = [item for stored in await self._query(searcher) for item in self._matches(searcher, stored)]
-            return self._sorted(searcher, items)
+            broken: list[BrokenObject] = []
+            found = [i for stored in await self._query(searcher) for i in self._matches(searcher, stored, broken)]
+            items = self._sorted(searcher, found)
+            if broken:
+                raise PartialResultError(items, broken)
+            return items
 
     async def iter_search(self, searcher: Searcher | None = None, **filters: Any) -> AsyncIterator[AsyncItem]:
-        """``search()`` one item at a time; with sort keys, everything is read before the first."""
+        """``search()`` one item at a time; with sort keys, everything is read before the first.
+
+        Objects left out raise ``PartialResultError`` at the end, with empty
+        ``results``: they were yielded.
+        """
         with self._context():
             searcher = self._searcher(searcher, filters)
             if getattr(searcher, "_sort_keys", None):
                 for item in await self.search(searcher):
                     yield item
                 return
+            broken: list[BrokenObject] = []
             async for stored in self._iter_query(searcher):
-                for item in self._matches(searcher, stored):
+                for item in self._matches(searcher, stored, broken):
                     yield item
+            if broken:
+                raise PartialResultError([], broken)  # the caller has the results already
 
     async def tasks(self, **filters: Any) -> list[AsyncTask]:
         if Component.TASK not in self.components:
@@ -421,19 +490,27 @@ class AsyncCollection(ABC):
             related = item.component.get("RELATED-TO", [])
             related = related if isinstance(related, list) else [related]
             out: dict[str, AsyncItem] = {}
+            broken: list[BrokenObject] = []
             for value in related:
                 kind = str(value.params.get("RELTYPE", "PARENT")).upper()
                 if wanted is None or kind == wanted:
-                    found = await self._lookup_relative(str(value))
+                    found = await self._lookup_relative(str(value), broken)
                     if found is not None:
                         out.setdefault(found.uid, found)
             back = {"PARENT": "CHILD", "CHILD": "PARENT"}
             if wanted is None or wanted in back:
-                for other in await self.search():
+                try:
+                    listed = await self.search()
+                except PartialResultError as exc:
+                    broken.extend(exc.broken)
+                    listed = list(exc.results)
+                for other in listed:
                     for value in self._related_to(other):
                         kind = str(value.params.get("RELTYPE", "PARENT")).upper()
                         if str(value) == item.uid and kind in back and (wanted is None or back[kind] == wanted):
                             out.setdefault(other.uid, other)
+            if broken:
+                raise PartialResultError(list(out.values()), broken)
             return list(out.values())
 
     @staticmethod
@@ -441,18 +518,16 @@ class AsyncCollection(ABC):
         related = item.component.get("RELATED-TO", [])
         return related if isinstance(related, list) else [related]
 
-    async def _lookup_relative(self, uid: str) -> AsyncItem | None:
-        try:
-            return await self.get(uid)
-        except NotFoundError:
-            pass
-        for other in await self._backend.collections():
-            if other.id == self.id:
-                continue
+    async def _lookup_relative(self, uid: str, broken: list[BrokenObject]) -> AsyncItem | None:
+        """Here first, then in the backend's other collections; past objects that cannot be read."""
+        others = [c for c in await self._backend.collections() if c.id != self.id]
+        for collection in [self, *others]:
             try:
-                return await other.get(uid)
+                return await collection.get(uid)
+            except PartialResultError as exc:  # not found among what could be read
+                broken.extend(exc.broken)
             except NotFoundError:
-                continue
+                pass
         return None  # a dangling relation
 
     # === writing =======================================================
@@ -701,8 +776,15 @@ class AsyncCollection(ABC):
                 stored = await self._move(item, target)
                 if stored is not None:
                     return target._one(stored, written=True)
+            if item.etag is not None and (await self._fetch(item.native_id)).etag != item.etag:
+                raise ConflictError(f"{item.native_id!r} changed since it was read")
             moved = await target.add(item.as_data(), loss=loss, verify=verify)
-            await self.delete(item)
+            try:
+                await self.delete(item)
+            except ConflictError:
+                with suppress(CalendaringError):  # best effort: the conflict is what to report
+                    await target.delete(moved, overwrite=True)
+                raise
             return moved
 
     # === binding, no I/O ===============================================
@@ -742,7 +824,12 @@ class AsyncCollection(ABC):
                     raise ValueError("changes(): known= with a token; an incremental report has its own baseline")
                 self._require(Feature.CHANGES_KNOWN)
             changed, deleted, new_token = await self._changes(token, known)
-            return ChangeSet([i for s in changed for i in self._bound(s)], deleted, new_token)
+            broken = [s for s in changed if isinstance(s, BrokenObject)]
+            items = [i for s in changed if not isinstance(s, BrokenObject) for i in self._bound(s)]
+            result = ChangeSet(items, deleted, new_token)
+            if broken:
+                raise PartialResultError(result, broken)
+            return result
 
     # === the collection itself =========================================
 

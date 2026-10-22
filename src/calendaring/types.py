@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING, Generic, NewType, TypeVar
 if TYPE_CHECKING:
     import icalendar
 
-    from .errors import CalendaringError
+    from .errors import CalendaringError, InvalidDataError
 
-__all__ = ["ChangeSet", "Component", "MultiResult", "Scope", "StoredObject", "SyncToken"]
+__all__ = ["BrokenObject", "ChangeSet", "Component", "MultiResult", "Scope", "StoredObject", "SyncToken"]
 
 T = TypeVar("T")
 
@@ -74,3 +74,19 @@ class StoredObject:
     native: object | None = None
     native_status: str | None = None
     native_priority: str | None = None
+
+
+@dataclass
+class BrokenObject:
+    """A stored object a listing could not use: it does not parse, or the searcher cannot match it.
+
+    Listing primitives return one in place of a ``StoredObject`` instead of
+    raising, so the rest of the collection stays readable; the generic layer
+    then raises ``PartialResultError``.  ``wire`` is the bytes as read, where
+    the backend has them, to repair the object from.
+    """
+
+    native_id: str
+    etag: str | None
+    wire: bytes | None
+    error: InvalidDataError

@@ -39,6 +39,7 @@ from .errors import (
     LossyWriteError,
     LossyWriteWarning,
     NotFoundError,
+    PartialResultError,
     RateLimitError,
     SyncTokenError,
     TransportError,
@@ -47,7 +48,7 @@ from .errors import (
 )
 from .items import Event, Item, Journal, Task, TaskStatus
 from .loss import Loss, LossPolicy
-from .types import ChangeSet, Component, MultiResult, Scope, StoredObject, SyncToken
+from .types import BrokenObject, ChangeSet, Component, MultiResult, Scope, StoredObject, SyncToken
 
 # Register the reference backend's kind ("memory") in both modes.
 from . import memory as _memory  # noqa: E402, F401  isort: skip
@@ -86,8 +87,10 @@ __all__ = [
     "LossyWriteWarning",
     "MultiResult",
     "NotFoundError",
+    "PartialResultError",
     "RateLimitError",
     "Scope",
+    "BrokenObject",
     "StoredObject",
     "Support",
     "SyncEvent",

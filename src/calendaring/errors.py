@@ -8,11 +8,12 @@ native one is always ``__cause__``.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from .capabilities import Feature
     from .loss import Loss
+    from .types import BrokenObject
 
 __all__ = [
     "AlreadyExistsError",
@@ -28,6 +29,7 @@ __all__ = [
     "LossyWriteError",
     "LossyWriteWarning",
     "NotFoundError",
+    "PartialResultError",
     "RateLimitError",
     "SyncTokenError",
     "TransportError",
@@ -129,6 +131,32 @@ class LossyWriteError(UnsupportedError):
 
 class InvalidDataError(CalendaringError, ValueError):
     """The backend rejected the data, or it does not parse."""
+
+
+class PartialResultError(InvalidDataError):
+    """A read that skipped stored objects it could not use; ``results`` is what it got from the rest.
+
+    ``results`` is what the call returns otherwise (a list of items, or the
+    ``ChangeSet`` for ``changes()``, whose token is good to pass on), and
+    ``broken`` the objects left out.  A broken object is not reported as
+    deleted.
+    """
+
+    def __init__(
+        self,
+        results: Any,
+        broken: Sequence[BrokenObject],
+        message: str = "",
+        *,
+        backend: str | None = None,
+        collection_id: str | None = None,
+    ) -> None:
+        text = message or f"{len(broken)} stored object(s) left out: " + ", ".join(
+            f"{b.native_id!r} ({b.error})" for b in broken
+        )
+        super().__init__(text, backend=backend, collection_id=collection_id)
+        self.results = results
+        self.broken = list(broken)
 
 
 class RateLimitError(CalendaringError):

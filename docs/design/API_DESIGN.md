@@ -1049,7 +1049,7 @@ initial set:
 | `identity.client-uid`, `identity.foreign-id` | [§3.2 Identity](#32-identity) |
 | `identity.client-native-id` | `add(native_id=...)`: the caller may name the stored object (CalDAV href, vdir file name) |
 | `properties.passthrough` | unknown properties and components survive a round trip |
-| `recurrence`, `recurrence.edit-this-and-future` | stores `RRULE`; [§3.7 Recurrence](#37-recurrence) |
+| `recurrence`, `recurrence.edit-this-and-future` | stores a recurrence set: `RRULE`, `RDATE`, `EXDATE` and the overrides (`RECURRENCE-ID`); `UNSUPPORTED` drops all four, overrides included; [§3.7 Recurrence](#37-recurrence) |
 | `recurrence.edit-occurrence` | `save(occurrence)` merges it into the stored object ([§3.7](#37-recurrence)); `UNSUPPORTED` where the merge is not available yet (Q3) |
 | `task.complete-recurring` | `complete()` on a recurring task or one occurrence of it ([§3.7](#37-recurrence)) |
 | `move` | [§2.3 Collection](#23-collection) |
@@ -1057,6 +1057,14 @@ initial set:
 | `task.start`, `task.due`, `task.completed`, `task.planned`, `task.estimate` | |
 | `task.relations.parent`, `task.relations.depends-on` | |
 | `categories`, `attendees` | for every component; on a task, attendees are its assignees |
+| `alarms` | `VALARM` components survive; `UNSUPPORTED` drops them |
+| `timezones` | a time with a `TZID` keeps it (with its `VTIMEZONE`), a floating time stays floating; `LOSSY` stores both in UTC, a floating time read as local time ([§4](#4-search)) |
+| `dates` | a `DATE` value stays a date; `LOSSY` stores midnight UTC |
+
+Text is not a feature: non-ASCII, escaped and multi-line text, and every
+value of a property with several, round-trip on every backend.  The
+conformance suite stores a corpus of real-world objects and lets `verify`
+compare what comes back; only what the declaration says may differ.
 
 Feature names are identifiers, not attribute paths: `task.due` means "stores a
 task's `DUE`", which is read as `task.component.DUE`, and `task.estimate`
@@ -1165,6 +1173,7 @@ CalendaringError
 ├── UnsupportedError              # carries .feature
 │   └── LossyWriteError           # carries .losses; raised before anything is sent
 ├── InvalidDataError              # the backend rejected the data, or it does not parse; also a ValueError
+│   └── PartialResultError        # a read left out stored objects it could not use; .results, .broken
 ├── RateLimitError                # carries .retry_after: float | None
 ├── VerificationError             # verify=True: written, but stored differently; carries .differences
 └── BackendError                  # anything else from the backend or transport
@@ -1197,7 +1206,23 @@ CalendaringWarning
   reload the item. It is still a `ConflictError`, as `AlreadyExistsError`
   is, because all three are a failed precondition; a handler that reloads
   on `ConflictError` should catch the subclasses first.
-- Fan-out ([§2.1 Workspace](#21-workspace)) does not raise; `MultiResult.raise_for_errors()` raises an `ExceptionGroup` of these.
+- **One bad stored object does not hide the rest.** A read that lists
+  (`search()`, `iter_search()` once exhausted, the listing shorthands,
+  `changes()`, `relatives()`, and `get(uid)` where the UID is not found)
+  leaves out an
+  object that does not parse, or that the searcher cannot match (two
+  masters for one UID), and then raises `PartialResultError`.  `.results`
+  is what the call would have returned from the rest (for `changes()` the
+  `ChangeSet`, whose token is good; for `iter_search()` nothing, since it
+  yielded them already), and `.broken` lists the objects left
+  out (`BrokenObject`: native id, etag, error, and the bytes as read where
+  the backend has them, to repair the object from).  A broken object is
+  never reported as deleted.  `get_by_native_id()` of one raises
+  `InvalidDataError`.  Raising rather than warning means no caller misses
+  it; a caller that can live with the gap takes `.results`.  The listing
+  primitives return a `BrokenObject` in place of a `StoredObject` rather
+  than raising, so the backend decides per object.
+- Fan-out ([§2.1 Workspace](#21-workspace)) does not raise; `MultiResult.raise_for_errors()` raises an `ExceptionGroup` of these.  `Workspace.search()` keeps a `PartialResultError`'s `.results` among the items, and the error among the errors.
 
 caldav's errors map one to one where they overlap:
 `NotFoundError` → `NotFoundError`, `ETagMismatchError` and
