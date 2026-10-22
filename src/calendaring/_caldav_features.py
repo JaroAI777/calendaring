@@ -40,6 +40,7 @@ FROM_SERVER = {
     Feature.RECURRENCE: "save-load.event.recurrences",
     Feature.TASK_RELATIONS_PARENT: "save-load.icalendar.related-to",
     Feature.TASK_RELATIONS_DEPENDS_ON: "save-load.icalendar.related-to",
+    Feature.TIMEZONES: "save-load.event.timezone",
 }
 
 COMPONENT_FROM_SERVER = {
@@ -94,6 +95,8 @@ STORED = frozenset(
         Feature.TASK_COMPLETED,
         Feature.TASK_PLANNED,
         Feature.TASK_ESTIMATE,
+        Feature.ALARMS,
+        Feature.DATES,
     }
 )
 

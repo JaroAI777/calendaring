@@ -14,7 +14,7 @@ import binascii
 import json
 import re
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 from urllib.parse import quote, unquote
 
@@ -24,10 +24,17 @@ from icalendar_searcher import Searcher
 from .._caldav_features import backend_capabilities, collection_capabilities
 from .._caldav_io import Calendar
 from ..capabilities import Feature
-from ..errors import AlreadyExistsError, ConfigurationError, ConflictError, NotFoundError, SyncTokenError
+from ..errors import (
+    AlreadyExistsError,
+    ConfigurationError,
+    ConflictError,
+    InvalidDataError,
+    NotFoundError,
+    SyncTokenError,
+)
 from ..items import _items_of, _parse
 from ..loss import LossPolicy
-from ..types import Component, StoredObject, SyncToken
+from ..types import BrokenObject, Component, StoredObject, SyncToken
 from .backend import Backend
 from .collection import Collection
 from .dav import DAV
@@ -72,9 +79,16 @@ class CalDAVCollection(Collection):
         parsed = _parse(data.encode() if isinstance(data, str) else bytes(data))
         return StoredObject(_name_of(obj.url), obj.etag, parsed, obj.raw_data, obj)
 
-    def _query(self, searcher: Searcher | None) -> list[StoredObject]:
+    def _listed(self, obj: Any) -> StoredObject | BrokenObject:
+        """As ``_stored``, but an object that does not parse is a ``BrokenObject`` with the server's bytes."""
+        try:
+            return self._stored(obj)
+        except InvalidDataError as exc:
+            return BrokenObject(_name_of(obj.url), obj.etag, obj.raw_data, exc)
+
+    def _query(self, searcher: Searcher | None) -> list[StoredObject | BrokenObject]:
         """Each kind the search can match, narrowed on the server only where that cannot under-match (A3)."""
-        found: dict[str, StoredObject] = {}
+        found: dict[str, StoredObject | BrokenObject] = {}
         for kind in sorted(self._kinds(searcher), key=lambda c: c.value):
             flags: dict[str, Any] = {SEARCH_FLAG[kind]: True}
             if kind is Component.TASK:
@@ -88,7 +102,7 @@ class CalDAVCollection(Collection):
             ):
                 flags.update({k: v for k, v in (("start", searcher.start), ("end", searcher.end)) if v is not None})
             for obj in self._backend._dav.search(self.calendar, **flags):
-                stored = self._stored(obj)
+                stored = self._listed(obj)
                 found.setdefault(stored.native_id, stored)
         return list(found.values())
 
@@ -102,18 +116,18 @@ class CalDAVCollection(Collection):
                 return self._stored(obj)
         raise NotFoundError(f"no object {native_id!r}")
 
-    def _fetch_many(self, native_ids: Any) -> list[StoredObject]:
+    def _fetch_many(self, native_ids: Any) -> list[StoredObject | BrokenObject]:
         hrefs = [self._href(n) for n in native_ids]
         if not hrefs:
             return []
-        return [self._stored(o) for o in self._backend._dav.multiget(self.calendar, hrefs) if o.data is not None]
+        return [self._listed(o) for o in self._backend._dav.multiget(self.calendar, hrefs) if o.data is not None]
 
     def _list_etags(self) -> dict[str, str]:
         return {_name_of(href): etag for href, etag in (self._backend._dav.etags(self.url)).items()}
 
     def _changes(
         self, token: SyncToken | None, known: Mapping[str, str] | None
-    ) -> tuple[list[StoredObject], list[str], SyncToken]:
+    ) -> tuple[Sequence[StoredObject | BrokenObject], list[str], SyncToken]:
         """The server's sync-collection report (RFC 6578) where it has one; else the inherited etag diff.
 
         A token from the etag diff (``changes(known=...)``, or a server that

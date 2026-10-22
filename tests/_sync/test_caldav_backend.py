@@ -13,10 +13,12 @@ import pytest
 from calendaring import (
     Backend,
     Collection,
+    CalendaringError,
     Component,
     ConfigurationError,
     ConflictError,
     NotFoundError,
+    PartialResultError,
     SyncTokenError,
     Task,
 )
@@ -24,6 +26,7 @@ from calendaring import (
 pytest.importorskip("caldav")
 
 from calendaring._sync.caldav import _name_of  # noqa: E402
+from calendaring._caldav_io import _resource  # noqa: E402
 
 
 @pytest.fixture
@@ -146,3 +149,105 @@ def test_a_token_from_elsewhere_is_refused(collection: Collection) -> None:
         with pytest.raises(SyncTokenError):
             caldav_collection._decode_server_token(token)
     assert caldav_collection._decode_server_token(caldav_collection._encode_server_token("t1")) == "t1"
+
+
+BAD_TODO = (  # DUE:2026-10-20 is not a valid DATE; some client wrote it
+    b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//some client//EN\r\nBEGIN:VTODO\r\nUID:from-phone\r\n"
+    b"DTSTAMP:20261001T000000Z\r\nSUMMARY:buy milk\r\nDUE:2026-10-20\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"
+)
+
+
+@pytest.fixture
+def radicale_collection(radicale_server: Any) -> Iterator[Collection]:
+    """On Radicale, caldav filters every search result itself: it has no case-sensitive text search."""
+    backend = Backend.open(
+        radicale_server.url,
+        kind="caldav",
+        username=radicale_server.username,
+        password=radicale_server.password,
+        features=radicale_server.config["features"],
+    )
+    with backend:
+        made = backend.create_collection("backend-tests", components=(Component.TASK,))
+        yield made
+        made.delete_collection()
+
+
+def serve_broken(collection: Collection, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serve BAD_TODO as if the server stored it: in every search, below caldav's own filtering, and in sync.
+
+    Servers check what they are given (Xandikos, Radicale), so it cannot be stored for real.
+    """
+    caldav_collection: Any = collection
+    calendar = caldav_collection.calendar
+    url = caldav_collection.url + "from-phone.ics"
+    build = calendar._request_report_build_resultlist
+
+    def broken(calendar: Any) -> Any:
+        return _resource(calendar.client, calendar, url, BAD_TODO, "VTODO", '"bad"')._keep_raw_data(BAD_TODO.decode())
+
+    def with_broken(*args: Any, **kwargs: Any) -> Any:
+        response, objects = build(*args, **kwargs)
+        return response, [*objects, broken(calendar)]
+
+    monkeypatch.setattr(calendar, "_request_report_build_resultlist", with_broken)
+    dav = caldav_collection._backend._dav
+    sync = dav.sync
+
+    def sync_too(*args: Any) -> tuple[list[str], list[str], str | None, bool]:
+        hrefs, gone, token, incomplete = sync(*args)
+        return [*hrefs, url], gone, token, incomplete
+
+    monkeypatch.setattr(dav, "sync", sync_too)
+    multiget = dav.multiget
+
+    def multiget_too(calendar: Any, urls: list[str]) -> list[Any]:
+        # caldav's multiget does not parse what it fetches, so serving it here skips nothing of caldav's.
+        found = multiget(calendar, [u for u in urls if u != url])
+        return [*found, broken(calendar)] if url in urls else found
+
+    monkeypatch.setattr(dav, "multiget", multiget_too)
+
+
+def check_partial_results(collection: Collection, monkeypatch: pytest.MonkeyPatch) -> None:
+    good = collection.add_task(summary="good task")
+    serve_broken(collection, monkeypatch)
+    with pytest.raises(PartialResultError) as info:
+        collection.search()
+    assert [i.uid for i in info.value.results] == [good.uid]
+    assert [(b.native_id, b.wire) for b in info.value.broken] == [("from-phone.ics", BAD_TODO)]
+    with pytest.raises(PartialResultError) as changes:
+        collection.changes()
+    assert [i.uid for i in changes.value.results.changed] == [good.uid]
+    assert [b.wire for b in changes.value.broken] == [BAD_TODO]
+
+
+def test_an_object_that_does_not_parse_gives_partial_results(
+    collection: Collection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    check_partial_results(collection, monkeypatch)
+
+
+CALDAV_815 = pytest.mark.xfail(
+    raises=ValueError,
+    strict=True,
+    reason="caldav's own result filter fails on an object that does not parse: "
+    "https://github.com/python-caldav/caldav/issues/815",
+)
+
+
+@CALDAV_815
+def test_partial_results_where_caldav_filters_every_search(
+    radicale_collection: Collection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    check_partial_results(radicale_collection, monkeypatch)
+
+
+@CALDAV_815
+def test_get_of_an_object_that_does_not_parse_says_so(
+    collection: Collection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A server returns the object for its own UID; caldav's UID lookup then filters it, and fails."""
+    serve_broken(collection, monkeypatch)
+    with pytest.raises(CalendaringError):
+        collection.get("from-phone")

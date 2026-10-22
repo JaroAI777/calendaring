@@ -36,7 +36,15 @@ def test_an_unhinted_server_is_unknown_not_unsupported() -> None:
 def test_what_the_server_stores_is_unknown_without_hints() -> None:
     unhinted = collection_capabilities(features(), ALL)
     known = collection_capabilities(hinted(save_load="full"), ALL)
-    for feature in (Feature.PROPERTIES_PASSTHROUGH, Feature.CATEGORIES, Feature.WRITE_CONDITIONAL, Feature.TASK_DUE):
+    for feature in (
+        Feature.PROPERTIES_PASSTHROUGH,
+        Feature.CATEGORIES,
+        Feature.WRITE_CONDITIONAL,
+        Feature.TASK_DUE,
+        Feature.ALARMS,
+        Feature.DATES,
+        Feature.TIMEZONES,
+    ):
         assert unhinted.level(feature) is Support.UNKNOWN, feature
         assert known.level(feature) is Support.FULL, feature
 
@@ -63,6 +71,11 @@ def test_what_the_backend_does_itself_is_declared_whatever_the_server() -> None:
 def test_levels_map_as_section_5_1_says(level: str, expected: Support) -> None:
     features = hinted(**{"create-calendar": level, "save-load": "full"})
     assert backend_capabilities(features).level(Feature.CREATE_COLLECTION) is expected
+
+
+def test_time_zones_follow_the_servers_hint() -> None:
+    server = features({"save-load": {"support": "full"}, "save-load.event.timezone": {"support": "unsupported"}})
+    assert collection_capabilities(server, ALL).level(Feature.TIMEZONES) is Support.UNSUPPORTED
 
 
 def test_a_calendar_without_a_component_cannot_hold_it() -> None:
