@@ -531,3 +531,46 @@ def test_stopping_a_timer_again_logs_it_once() -> None:
     task.stop_timer(at=datetime(2026, 11, 3, 10, tzinfo=UTC))
     [entry] = task.time_log()
     assert entry.duration == HOUR
+
+
+class MakesEventsOnly(MemoryBackend):
+    """Holds tasks, but makes events-only collections whatever is asked, as Bedework does."""
+
+    def _create_collection(self, name: str, components: frozenset[Component]) -> Collection:
+        return super()._create_collection(name, frozenset({Component.EVENT}))
+
+
+def test_a_collection_holding_nothing_asked_for_is_deleted_and_refused() -> None:
+    backend = MakesEventsOnly()
+    before = [c.id for c in backend.collections()]
+    with pytest.raises(UnsupportedError) as info:
+        backend.create_collection("tasks", components=(Component.TASK, Component.JOURNAL))
+    assert info.value.feature == Feature.COMPONENT_JOURNAL  # the first, sorted
+    assert [c.id for c in backend.collections()] == before
+
+
+def test_a_refused_collection_that_cannot_be_deleted_is_named() -> None:
+    backend = MakesEventsOnly()
+    backend.capabilities = backend.capabilities.updated({Feature.DELETE_COLLECTION: Support.UNSUPPORTED})
+    with pytest.raises(UnsupportedError, match="'tasks'.*could not be deleted") as info:
+        backend.create_collection("tasks", components=(Component.TASK,))
+    assert info.value.feature == Feature.COMPONENT_TASK
+
+
+def test_a_failed_clean_up_does_not_hide_the_refusal() -> None:
+    backend = MakesEventsOnly()
+
+    def failing() -> None:
+        raise BackendError("the server would not delete it")
+
+    original = backend._create_collection
+
+    def made(name: str, components: frozenset[Component]) -> Collection:
+        collection = original(name, components)
+        collection._delete_collection = failing  # type: ignore[method-assign]
+        return collection
+
+    backend._create_collection = made  # type: ignore[method-assign]
+    with pytest.raises(UnsupportedError, match="could not be deleted") as info:
+        backend.create_collection("tasks", components=(Component.TASK,))
+    assert isinstance(info.value.__cause__, BackendError)

@@ -531,3 +531,46 @@ async def test_stopping_a_timer_again_logs_it_once() -> None:
     await task.stop_timer(at=datetime(2026, 11, 3, 10, tzinfo=UTC))
     [entry] = await task.time_log()
     assert entry.duration == HOUR
+
+
+class MakesEventsOnly(AsyncMemoryBackend):
+    """Holds tasks, but makes events-only collections whatever is asked, as Bedework does."""
+
+    async def _create_collection(self, name: str, components: frozenset[Component]) -> AsyncCollection:
+        return await super()._create_collection(name, frozenset({Component.EVENT}))
+
+
+async def test_a_collection_holding_nothing_asked_for_is_deleted_and_refused() -> None:
+    backend = MakesEventsOnly()
+    before = [c.id for c in await backend.collections()]
+    with pytest.raises(UnsupportedError) as info:
+        await backend.create_collection("tasks", components=(Component.TASK, Component.JOURNAL))
+    assert info.value.feature == Feature.COMPONENT_JOURNAL  # the first, sorted
+    assert [c.id for c in await backend.collections()] == before
+
+
+async def test_a_refused_collection_that_cannot_be_deleted_is_named() -> None:
+    backend = MakesEventsOnly()
+    backend.capabilities = backend.capabilities.updated({Feature.DELETE_COLLECTION: Support.UNSUPPORTED})
+    with pytest.raises(UnsupportedError, match="'tasks'.*could not be deleted") as info:
+        await backend.create_collection("tasks", components=(Component.TASK,))
+    assert info.value.feature == Feature.COMPONENT_TASK
+
+
+async def test_a_failed_clean_up_does_not_hide_the_refusal() -> None:
+    backend = MakesEventsOnly()
+
+    async def failing() -> None:
+        raise BackendError("the server would not delete it")
+
+    original = backend._create_collection
+
+    async def made(name: str, components: frozenset[Component]) -> AsyncCollection:
+        collection = await original(name, components)
+        collection._delete_collection = failing  # type: ignore[method-assign]
+        return collection
+
+    backend._create_collection = made  # type: ignore[method-assign]
+    with pytest.raises(UnsupportedError, match="could not be deleted") as info:
+        await backend.create_collection("tasks", components=(Component.TASK,))
+    assert isinstance(info.value.__cause__, BackendError)

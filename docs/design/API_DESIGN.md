@@ -1199,7 +1199,7 @@ initial set:
 |---|---|
 | `write` | create, update and delete items at all |
 | `component.event`, `component.task`, `component.journal` | can hold that component |
-| `create-collection`, `delete-collection` | backend-level |
+| `create-collection`, `delete-collection` | backend-level; see below |
 | `collection.set-name` | `set_name()` |
 | `search.server-side`, `search.time-range`, `search.text` | how much the server filters; never affects results ([§4 Search](#4-search)) |
 | `changes` | `changes()`: `FULL` with a native token, `EMULATED` by listing |
@@ -1221,6 +1221,14 @@ initial set:
 | `timezones` | a time with a `TZID` keeps it (with its `VTIMEZONE`), a floating time stays floating; `LOSSY` stores both in UTC, a floating time read as local time ([§4](#4-search)) |
 | `dates` | a `DATE` value stays a date; `LOSSY` stores midnight UTC |
 | `time-log` | the time log of a task or event ("Time tracking" in [§3.4](#34-task)); `LOSSY` with `details["lost"]`, or `details["total-only"]` |
+
+`create_collection(components=...)` is `LOSSY` where the server does not
+keep the requested components, as caldav says of SOGo (a calendar for all
+of them), Bedework 5 (one for events only) and GMX. No loss policy applies, as nothing
+is written; the collection's `components` say what it holds. A collection
+that would hold none of what was asked is deleted again where it can be,
+and refused with `UnsupportedError` for the first requested component in
+sorted order.
 
 Text is not a feature: non-ASCII, escaped and multi-line text, and every
 value of a property with several, round-trip on every backend.  The

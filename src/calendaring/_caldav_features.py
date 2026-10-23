@@ -28,7 +28,7 @@ from .types import Component
 
 __all__ = ["backend_capabilities", "collection_capabilities"]
 
-F, E, U, X = Support.FULL, Support.EMULATED, Support.UNSUPPORTED, Support.UNKNOWN
+F, L, E, U, X = Support.FULL, Support.LOSSY, Support.EMULATED, Support.UNSUPPORTED, Support.UNKNOWN
 
 LEVELS = {
     "full": F,
@@ -114,6 +114,14 @@ def _table(features: Any) -> dict[Feature, Any]:
         table.update(dict.fromkeys(STORED, X))
     for feature, name in FROM_SERVER.items():
         table[feature] = _level(features, name)
+    if (
+        table[Feature.CREATE_COLLECTION] is F
+        and _level(features, "create-calendar.with-supported-component-types") is U
+    ):
+        table[Feature.CREATE_COLLECTION] = {
+            "level": L,
+            "note": "the requested components are not kept: the server decides",
+        }
     return table
 
 

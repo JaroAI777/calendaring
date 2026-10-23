@@ -146,6 +146,44 @@ TASK_FEED = Profile(
 )
 
 
+# Two servers that do not keep the requested components: SOGo makes a calendar for
+# everything, Bedework one for events only.  The second is refused when tasks are asked for.
+IGNORES_COMPONENTS = Profile(
+    "ignores-components",
+    {
+        **FULL.capabilities,
+        Feature.COMPONENT_JOURNAL: Support.UNSUPPORTED,
+        Feature.CREATE_COLLECTION: {"level": Support.LOSSY, "note": "the requested components are not kept"},
+    },
+    frozenset({Component.EVENT, Component.TASK}),
+)
+
+EVENTS_WHATEVER = Profile(
+    "events-whatever",
+    {**IGNORES_COMPONENTS.capabilities, Feature.COMPONENT_TASK: Support.UNSUPPORTED},
+    frozenset({Component.EVENT}),
+)
+
+
+class IgnoresComponents(AsyncMemoryBackend):
+    async def _create_collection(self, name: str, components: frozenset[Component]) -> AsyncCollection:
+        return await super()._create_collection(name, self.profile.components)
+
+
+class TestIgnoresComponentsProfile(AsyncConformance):
+    """A calendar for every component the backend holds, whatever is asked (SOGo)."""
+
+    async def open_backend(self) -> AsyncBackend:
+        return IgnoresComponents(profile=IGNORES_COMPONENTS)
+
+
+class TestEventsWhateverProfile(AsyncConformance):
+    """An events-only calendar, whatever is asked (Bedework)."""
+
+    async def open_backend(self) -> AsyncBackend:
+        return IgnoresComponents(profile=EVENTS_WHATEVER)
+
+
 class TestEventsOnlyProfile(AsyncConformance):
     """Writable without tasks; a change feed without known=; move, but no second collection."""
 

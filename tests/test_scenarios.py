@@ -111,7 +111,11 @@ def fresh_calendar(
         return
     if on_a_server and backend.capabilities.level(Feature.DELETE_COLLECTION) is Support.UNSUPPORTED:
         pytest.skip("the server cannot delete calendars, so every story would leave one behind")
-    calendar = backend.create_collection(name, components=components)
+    try:
+        calendar = backend.create_collection(name, components=components)
+    except UnsupportedError:
+        # A tracker asked for an events-only calendar refuses: it would hold none of it.
+        pytest.skip("the backend cannot make a calendar holding any of what was asked for")
     # Journals are optional; the journal story checks their refusal.
     missing = set(components) - calendar.components - {Component.JOURNAL}
     if on_a_server and missing:
@@ -119,9 +123,6 @@ def fresh_calendar(
         pytest.skip(
             f"the server made a calendar without {sorted(c.value for c in missing)} (Bedework makes events-only ones)"
         )
-    if not calendar.components:
-        # A tracker asked for an events-only calendar makes one holding nothing at all.
-        pytest.skip("the backend made a calendar that holds none of what was asked for")
     yield calendar
     if backend.capabilities.level(Feature.DELETE_COLLECTION) is not Support.UNSUPPORTED:
         calendar.delete_collection()
