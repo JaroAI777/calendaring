@@ -35,7 +35,7 @@ from ..errors import (
     UnsupportedError,
     VerificationError,
 )
-from ..items import Event, Item, Journal, Task, _items_of, _parse, split_stored
+from ..items import Event, Item, Journal, Task, _items_of, _parse, split_stored, without_occurrence
 from ..loss import RAISE, LossPolicy
 from ..types import BrokenObject, ChangeSet, Component, Scope, StoredObject, SyncToken
 from .items import BOUND, SyncEvent, SyncItem, SyncJournal, SyncTask
@@ -50,6 +50,31 @@ COMPONENT_FEATURE = {
     Component.TASK: Feature.COMPONENT_TASK,
     Component.JOURNAL: Feature.COMPONENT_JOURNAL,
 }
+
+
+def _occurrence_now(calendar: icalendar.Calendar, item: Item) -> icalendar.Component | None:
+    """The occurrence ``item`` was, as the stored object has it now: its override, or one generated from the master."""
+    wanted = item.component["RECURRENCE-ID"]
+    for component in _items_of(calendar):
+        if component.get("RECURRENCE-ID") == wanted:
+            return component
+    rid = item.component.decoded("RECURRENCE-ID")
+    generated: list[icalendar.Component] = recurring_ical_events.of(calendar).between(rid, rid + timedelta(seconds=1))
+    for component in generated:
+        if component.get("RECURRENCE-ID") == wanted:
+            return component
+    return None
+
+
+def _occurs_at(item: Item) -> datetime:
+    """Where an occurrence sorts: its ``RECURRENCE-ID`` as an aware instant (floating counts as UTC)."""
+    rid = item.component.get("RECURRENCE-ID")
+    if rid is None:
+        return datetime.min.replace(tzinfo=UTC)
+    value = rid.dt
+    if not isinstance(value, datetime):
+        value = datetime(value.year, value.month, value.day)
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 class Collection(ABC):
@@ -449,8 +474,9 @@ class Collection(ABC):
         return [i for i in self.search(journal=True, **filters) if isinstance(i, SyncJournal)]
 
     def get(self, uid: str) -> SyncItem:
+        """The item with this UID.  Overrides stored without their master: the earliest occurrence (§3.1)."""
         with self._context():
-            return self._one(self._find_uid(uid))
+            return min(self._bound(self._find_uid(uid)), key=_occurs_at)
 
     def get_by_native_id(self, native_id: str) -> SyncItem:
         with self._context():
@@ -694,7 +720,7 @@ class Collection(ABC):
             return result
 
     def delete(self, item: Item | str, *, overwrite: bool = False) -> None:
-        """Remove a stored item.  Given an item, unless it changed since it was read."""
+        """Remove a stored item: ``NotFoundError`` if it is gone.  Given an item, unless it changed since it was read."""
         with self._context():
             self._require(Feature.WRITE)
             if isinstance(item, str):
@@ -703,9 +729,36 @@ class Collection(ABC):
             if item.native_id is None:
                 raise ValueError("delete(): the item was never stored")
             if item.is_occurrence:
-                # EXDATE or STATUS:CANCELLED is undecided (API_DESIGN.md Q12).
-                raise UnsupportedError(None, "deleting one occurrence is undecided (API_DESIGN.md Q12)")
+                self._delete_occurrence(item, overwrite=overwrite)
+                return
             self._delete(item.native_id, etag=None if overwrite else item.etag)
+
+    def _delete_occurrence(self, item: Item, *, overwrite: bool) -> None:
+        """An ``EXDATE`` in the master's own form, and the override gone (API_DESIGN.md Q12).
+
+        Siblings share the stored object's etag, so a stale etag is not a
+        conflict by itself: only a change to this occurrence on the server is.
+        It is found by comparing the stored occurrence with the item as the
+        caller holds it, so once the etag moved, a local edit before
+        ``delete()`` also counts as one; with the etag unchanged nothing
+        changed on the server, and a local edit is deleted with the rest.
+        An occurrence already gone is ``NotFoundError``.
+        """
+        assert item.native_id is not None
+        stored = self._fetch(item.native_id)
+        if stored.etag != item.etag:
+            now = _occurrence_now(stored.calendar, item)
+            if now is None:
+                raise NotFoundError(f"the occurrence {item.component.decoded('RECURRENCE-ID')} is gone")
+            if not overwrite and now != item.component:
+                raise ConflictError(
+                    f"the occurrence {item.component.decoded('RECURRENCE-ID')} changed since it was read"
+                )
+        calendar = without_occurrence(stored.calendar, item.uid, item.component.decoded("RECURRENCE-ID"))
+        if not _items_of(calendar):
+            self._delete(item.native_id, etag=stored.etag)
+            return
+        self._update(item.native_id, calendar, etag=stored.etag, wire=None)
 
     def complete(
         self,

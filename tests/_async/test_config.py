@@ -46,6 +46,18 @@ async def test_one_backend_per_section_named_after_it(tmp_path: Path) -> None:
     assert all(b._workspace is workspace for b in workspace.backends)
 
 
+async def test_keys_for_test_tooling_are_ignored(tmp_path: Path) -> None:
+    path = write(tmp_path, {"default": {"url": "memory:", "test_allowed": True, "test_priority": 5}})
+    [backend] = (await AsyncWorkspace.from_config(path)).backends
+    assert isinstance(backend, AsyncMemoryBackend)
+
+
+async def test_an_unknown_key_is_still_an_error(tmp_path: Path) -> None:
+    path = write(tmp_path, {"default": {"url": "memory:", "tset_allowed": True}})
+    with pytest.raises(ConfigurationError, match="section default"):
+        await AsyncWorkspace.from_config(path)
+
+
 async def test_section_from_the_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = write(tmp_path, {"default": {"url": "memory:"}, "other": {"url": "memory:"}})
     monkeypatch.setenv("CALENDARING_CONFIG_SECTION", "other")
@@ -98,7 +110,7 @@ async def test_url_must_be_a_string(tmp_path: Path) -> None:
 
 
 async def test_error_does_not_repeat_credentials_in_the_url(tmp_path: Path) -> None:
-    path = write(tmp_path, {"default": {"url": "https://alice:s3cret@dav.example.com/"}})
+    path = write(tmp_path, {"default": {"url": "gopher://alice:s3cret@dav.example.com/"}})
     with pytest.raises(ConfigurationError, match="section default") as info:
         await AsyncWorkspace.from_config(path)
     assert "s3cret" not in str(info.value)

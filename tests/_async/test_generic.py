@@ -40,14 +40,14 @@ def at(day: int, hour: int = 12) -> datetime:
     return datetime(2026, 11, day, hour, tzinfo=UTC)
 
 
-async def test_connect_picks_the_kind_from_the_url() -> None:
-    backend = await AsyncBackend.connect("memory:", id="from-url")
+async def test_open_picks_the_kind_from_the_url() -> None:
+    backend = await AsyncBackend.open("memory:", id="from-url")
     assert isinstance(backend, AsyncMemoryBackend)
     assert backend.id == "from-url"
     with pytest.raises(ConfigurationError):
-        await AsyncBackend.connect("https://caldav.example.com/")
+        await AsyncBackend.open("gopher://calendar.example.com/")
     with pytest.raises(ConfigurationError):
-        await AsyncBackend.connect("memory:", kind="no-such-kind")
+        await AsyncBackend.open("memory:", kind="no-such-kind")
 
 
 async def test_verify_catches_a_silent_drop() -> None:
@@ -173,15 +173,12 @@ async def test_completed_is_utc() -> None:
     assert b"COMPLETED:20261101T120000Z" in task.to_ical()
 
 
-async def test_deleting_an_occurrence_is_a_library_limitation() -> None:
+async def test_an_occurrence_is_not_a_whole_object_for_wire() -> None:
     collection = await AsyncMemoryBackend().collection("default")
     series = Event.new(summary="daily", start=at(1, 9), end=at(1, 10))
     series.component.add("RRULE", {"FREQ": "DAILY", "COUNT": 5})
     await collection.add(series)
     first = (await collection.search(event=True, start=at(2, 0), end=at(2, 23), expand=True))[0]
-    with pytest.raises(UnsupportedError) as info:
-        await collection.delete(first)
-    assert info.value.feature is None
     with pytest.raises(ValueError, match="wire"):
         await collection.save(first, wire=b"")
 
@@ -374,3 +371,31 @@ async def test_the_default_token_scope_is_kind_backend_and_collection() -> None:
         await (await Backend(id="home").collection("default")).changes(token)
     # Another store under the same label: the default cannot tell them apart.
     await (await Backend(id="work").collection("default")).changes(token)
+
+
+async def test_a_backend_from_a_missing_extra_says_what_to_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(AsyncBackend, "_kinds", {k: v for k, v in AsyncBackend._kinds.items() if k != "caldav"})
+    with pytest.raises(ConfigurationError, match=r"pip install 'calendaring\[caldav\]'"):
+        await AsyncBackend.open("https://caldav.example.com/", kind="caldav")
+
+
+async def test_http_urls_are_caldav_until_the_feed_probe_exists() -> None:
+    pytest.importorskip("caldav")
+    backend = await AsyncBackend.open("https://caldav.example.com/dav/", username="u", password="p")
+    async with backend:
+        assert backend.kind == "caldav"
+
+
+async def test_get_on_overrides_without_a_master_returns_the_earliest() -> None:
+    backend = AsyncMemoryBackend()
+    collection = await backend.collection("default")
+    assert isinstance(collection, AsyncMemoryCollection)
+    later = Event.new(summary="later", start=at(5, 9), end=at(5, 10), uid="invited")
+    later.component.add("RECURRENCE-ID", at(5, 9))
+    earlier = Event.new(summary="earlier", start=at(2, 9), end=at(2, 10), uid="invited")
+    earlier.component.add("RECURRENCE-ID", at(2, 9))
+    later.icalendar.add_component(earlier.component)
+    collection.store.put(later.to_ical())
+    found = await collection.get("invited")
+    assert found.is_occurrence
+    assert str(found.component["SUMMARY"]) == "earlier"

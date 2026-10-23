@@ -7,7 +7,7 @@ import icalendar
 import pytest
 
 from calendaring import Event, InvalidDataError, Item, Journal, Task, TaskStatus
-from calendaring.items import split_stored
+from calendaring.items import split_stored, without_occurrence
 
 UTC_NOON = datetime(2026, 11, 1, 12, tzinfo=UTC)
 
@@ -165,3 +165,36 @@ def test_new_has_one_uid_and_its_timezones() -> None:
     task = Task.new(summary="a", end=datetime(2026, 11, 1, 12, tzinfo=ZoneInfo("Europe/Oslo")))
     assert "UID" not in task.icalendar, "the VCALENDAR must not carry a UID of its own"
     assert [c.name for c in task.icalendar.subcomponents] == ["VTIMEZONE", "VTODO"]
+
+
+@pytest.mark.parametrize(
+    ("dtstart", "rid", "exdate"),
+    [
+        ("DTSTART;VALUE=DATE:20261101", "RECURRENCE-ID;VALUE=DATE:20261102", "EXDATE;VALUE=DATE:20261102"),
+        ("DTSTART:20261101T120000", "RECURRENCE-ID:20261102T120000", "EXDATE:20261102T120000"),
+        ("DTSTART:20261101T120000Z", "RECURRENCE-ID:20261102T120000Z", "EXDATE:20261102T120000Z"),
+        (
+            "DTSTART;TZID=Europe/Oslo:20261101T120000",
+            "RECURRENCE-ID:20261102T110000Z",
+            "EXDATE;TZID=Europe/Oslo:20261102T120000",
+        ),
+    ],
+    ids=["date", "floating", "utc", "zoned"],
+)
+def test_an_exdate_takes_the_form_of_dtstart(dtstart: str, rid: str, exdate: str) -> None:
+    master = todo("r", f"{dtstart}\r\nRRULE:FREQ=DAILY;COUNT=3\r\n")
+    override = todo("r", f"{rid}\r\n")
+    data = Task.from_ical(calendar(master, override)).icalendar
+    rid_value = Task.from_ical(calendar(override)).component.decoded("RECURRENCE-ID")
+    out = without_occurrence(data, "r", rid_value)
+    [left] = out.walk("VTODO")
+    assert "RECURRENCE-ID" not in left
+    assert exdate.encode() in left.to_ical()
+
+
+def test_an_exdate_without_dtstart_takes_the_form_of_the_recurrence_id() -> None:
+    master = todo("r", "DUE:20261101T120000Z\r\nRRULE:FREQ=DAILY;COUNT=3\r\n")
+    override = todo("r", "RECURRENCE-ID:20261102T120000Z\r\n")
+    rid = Task.from_ical(calendar(override)).component.decoded("RECURRENCE-ID")
+    [left] = without_occurrence(Task.from_ical(calendar(master, override)).icalendar, "r", rid).walk("VTODO")
+    assert b"EXDATE:20261102T120000Z" in left.to_ical()

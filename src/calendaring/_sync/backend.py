@@ -19,9 +19,12 @@ if TYPE_CHECKING:
 
 __all__ = ["Backend"]
 
-# URL scheme -> backend kind, for connect() without kind= (§2.2).  http(s)
-# needs the "feed or CalDAV" probe of roadmap 2.3, and trackers need kind=.
-SCHEMES = {"": "files", "file": "files", "webcal": "feed", "memory": "memory"}
+# URL scheme -> backend kind, for open() without kind= (§2.2).  http(s)
+# is CalDAV until the "feed or CalDAV" probe of roadmap 2.3, and trackers need kind=.
+SCHEMES = {"": "files", "file": "files", "webcal": "feed", "memory": "memory", "http": "caldav", "https": "caldav"}
+
+# Backend kinds that come with an optional extra, and its name.
+EXTRAS = {"caldav": "caldav"}
 
 
 class Backend(ABC):
@@ -61,7 +64,7 @@ class Backend(ABC):
         return f"<{type(self).__name__} {self.id}>"
 
     @classmethod
-    def connect(
+    def open(
         cls,
         url: str,
         *,
@@ -82,13 +85,16 @@ class Backend(ABC):
         try:
             klass = kinds[kind]
         except KeyError:
+            if kind in EXTRAS:
+                extra = EXTRAS[kind]
+                raise ConfigurationError(f"the {kind} backend needs: pip install 'calendaring[{extra}]'") from None
             raise ConfigurationError(f"no backend of kind {kind!r} (known: {sorted(kinds)})") from None
-        return klass._connect(url, username=username, password=password, token=token, session=session, **options)
+        return klass._open(url, username=username, password=password, token=token, session=session, **options)
 
     @classmethod
     @abstractmethod
-    def _connect(cls, url: str, **options: Any) -> Backend:
-        """Make the backend ``connect()`` picked; credentials and ``session`` come in ``options``."""
+    def _open(cls, url: str, **options: Any) -> Backend:
+        """Make the backend ``open()`` picked; credentials and ``session`` come in ``options``."""
 
     # --- collections --------------------------------------------------
 

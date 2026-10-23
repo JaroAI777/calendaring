@@ -33,6 +33,7 @@ import uuid
 from collections.abc import Iterator, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import icalendar
 import pytest
@@ -121,6 +122,16 @@ KINDS: dict[Component, tuple[type[Item], str, str, type[SyncItem], Feature]] = {
     Component.TASK: (Task, "add_task", "tasks", SyncTask, Feature.COMPONENT_TASK),
     Component.JOURNAL: (Journal, "add_journal", "journals", SyncJournal, Feature.COMPONENT_JOURNAL),
 }
+
+# What a component needs to be valid: RFC 5545 requires DTSTART on a VEVENT
+# outside a scheduling message, and a server may refuse one without (Radicale).
+REQUIRED: dict[Component, dict[str, Any]] = {Component.EVENT: {"start": at(1)}}
+
+
+def minimal(kind: Component, summary: str, **properties: Any) -> Item:
+    """The smallest valid item of a kind, with ``properties`` as ``new()`` takes them."""
+    return KINDS[kind][0].new(summary=summary, **REQUIRED.get(kind, {}), **properties)
+
 
 # A feature that is about one property, and a value of it to store.
 PROPERTY_SAMPLES: dict[Feature, tuple[str, Any, dict[str, str]]] = {
@@ -392,14 +403,16 @@ class SyncConformance:
 
     @pytest.mark.parametrize("kind", list(KINDS))
     def test_add_returns_a_bound_item(self, collection: Collection, kind: Component) -> None:
-        data_class, add_name, list_name, bound_class, feature = KINDS[kind]
-        item = data_class.new(summary="conformance")
+        _, add_name, list_name, bound_class, feature = KINDS[kind]
+        item = minimal(kind, "conformance")
         if not writable(collection):
             self.assert_read_only(collection)
             return
         if not holds(collection, kind):
             self.assert_unsupported(collection, feature, lambda: collection.add(item))
-            self.assert_unsupported(collection, feature, lambda: getattr(collection, add_name)(summary="x"))
+            self.assert_unsupported(
+                collection, feature, lambda: getattr(collection, add_name)(summary="x", **REQUIRED.get(kind, {}))
+            )
             assert getattr(collection, list_name)() == []
             return
         stored = collection.add(item)
@@ -413,7 +426,7 @@ class SyncConformance:
         assert str(stored.component["SUMMARY"]) == "conformance"
         assert item.native_id is None, "add() changed its argument"
         assert item.etag is None, "add() changed its argument"
-        shorthand = getattr(collection, add_name)(summary="shorthand")
+        shorthand = getattr(collection, add_name)(summary="shorthand", **REQUIRED.get(kind, {}))
         assert isinstance(shorthand, bound_class)
         assert {i.native_id for i in getattr(collection, list_name)()} >= {stored.native_id, shorthand.native_id}
 
@@ -486,24 +499,24 @@ class SyncConformance:
 
     def test_get_finds_the_exact_uid(self, backend: Backend, collection: Collection) -> None:
         stored = []
-        for kind, (data_class, _, _, bound_class, _) in KINDS.items():
+        for kind, (_, _, _, bound_class, _) in KINDS.items():
             if holds(collection, kind) and writable(collection):
-                item = data_class.new(summary=f"get {kind.value}")
+                item = minimal(kind, f"get {kind.value}")
                 added = collection.add(item)
                 if level(collection, Feature.IDENTITY_CLIENT_UID) is not Support.UNSUPPORTED:
                     assert added.uid == item.uid, f"identity.client-uid: the {kind.value} UID was replaced"
-                stored.append((added, bound_class))
+                stored.append((added, bound_class, kind))
         if not stored:
             pytest.skip("nothing can be stored here")
-        for added, bound_class in stored:
+        for added, bound_class, _ in stored:
             found = collection.get(added.uid)
             assert isinstance(found, bound_class)
             assert found.native_id == added.native_id
         if level(collection, Feature.IDENTITY_CLIENT_UID) is not Support.UNSUPPORTED:
-            kind_class = stored[0][0].as_data().__class__
-            suffix = f"{stored[0][0].uid}@conformance.invalid"
-            longer = collection.add(kind_class.new(summary="longer", uid=f"11-{suffix}"))
-            shorter = collection.add(kind_class.new(summary="shorter", uid=f"1-{suffix}"))
+            first, _, first_kind = stored[0]
+            suffix = f"{first.uid}@conformance.invalid"
+            longer = collection.add(minimal(first_kind, "longer", uid=f"11-{suffix}"))
+            shorter = collection.add(minimal(first_kind, "shorter", uid=f"1-{suffix}"))
             assert (collection.get(shorter.uid)).native_id == shorter.native_id
             assert (collection.get(longer.uid)).native_id == longer.native_id
             with pytest.raises(NotFoundError):
@@ -523,7 +536,7 @@ class SyncConformance:
         if not writable(collection):
             return  # test_read_only_rejects_every_write checked the writes
         kind = next(k for k in KINDS if holds(collection, k))
-        item = KINDS[kind][0].new(summary="named and identified")
+        item = minimal(kind, "named and identified")
         name = f"conformance-{uuid.uuid4().hex[:12]}.ics"
         stored = collection.add(item, native_id=name)
         assert stored.uid == item.uid
@@ -547,15 +560,14 @@ class SyncConformance:
     def test_read_paths_on_seeded_items(self, collection: Collection) -> None:
         """What a read-only backend must pass too: everything here is stored through ``seed()``."""
         kind = next(k for k in KINDS if holds(collection, k))
-        new = KINDS[kind][0].new
-        [first] = self.seed(collection, [new(summary="seeded first")])
+        [first] = self.seed(collection, [minimal(kind, "seeded first")])
         assert (collection.get(first.uid)).native_id == first.native_id
         assert (collection.get_by_native_id(nid(first))).uid == first.uid
         assert (collection.reload(first)).etag == first.etag
         if level(collection, Feature.CHANGES) is Support.UNSUPPORTED:
             return
         start = collection.changes()
-        [second] = self.seed(collection, [new(summary="seeded second")])
+        [second] = self.seed(collection, [minimal(kind, "seeded second")])
         since = collection.changes(start.token)
         assert nid(second) in {nid(i) for i in since.changed}
         assert nid(first) not in {nid(i) for i in since.changed}
@@ -633,6 +645,10 @@ class SyncConformance:
         collection.delete(nid(other))
         with pytest.raises(NotFoundError):
             collection.get(other.uid)
+        with pytest.raises(NotFoundError):
+            collection.delete(nid(other))
+        with pytest.raises(NotFoundError):
+            collection.delete(stale, overwrite=True)
 
     def test_read_only_rejects_every_write(self, backend: Backend, collection: Collection) -> None:
         if writable(collection):
@@ -640,7 +656,7 @@ class SyncConformance:
         kinds = [k for k in KINDS if holds(collection, k)]
         if not kinds:
             pytest.fail("a read-only collection that holds nothing")
-        [stored] = self.seed(collection, [KINDS[kinds[0]][0].new(summary="seeded")])
+        [stored] = self.seed(collection, [minimal(kinds[0], "seeded")])
         other = self.open_collection(backend, "conformance-other")
         for call in (
             lambda: collection.add(Task.new(summary="x")),
@@ -832,8 +848,7 @@ class SyncConformance:
 
     def test_listings_are_not_cut_at_a_page(self, collection: Collection) -> None:
         kind = next(k for k in KINDS if holds(collection, k))
-        new = KINDS[kind][0].new
-        seeded = self.seed(collection, [new(summary=f"paged {n}") for n in range(self.page_size_hint)])
+        seeded = self.seed(collection, [minimal(kind, f"paged {n}") for n in range(self.page_size_hint)])
         mine = {nid(i) for i in seeded}
         assert {nid(i) for i in stored_by(collection.search(), seeded)} == mine
         assert {nid(i) for i in collection.iter_search() if i.native_id in mine} == mine
@@ -943,6 +958,72 @@ class SyncConformance:
         again = stored_by(collection.search(event=True, start=at(2), end=at(4), expand=True), seeded)
         assert sorted(str(i.component["SUMMARY"]) for i in again) == ["R: daily", "R: moved"]
 
+    def recurring_series(self, collection: Collection) -> SyncEvent:
+        """A stored daily series in Europe/Oslo time, with day 3 moved (an override), or the test ends here."""
+        if not writable(collection):
+            self.assert_read_only(collection)
+            pytest.skip("read-only collection: the write paths were checked to raise")
+        if not holds(collection, Component.EVENT):
+            pytest.skip("the collection holds no events")
+        if level(collection, Feature.RECURRENCE) is Support.UNSUPPORTED:
+            pytest.skip("nothing recurs: test_expanded_search_returns_occurrences checks the refusal")
+        oslo = ZoneInfo("Europe/Oslo")
+        start = at(1, 9).astimezone(oslo)
+        series = Event.new(summary="R: daily", start=start, end=start + timedelta(hours=1))
+        series.component.add("RRULE", {"FREQ": "DAILY", "COUNT": 5})
+        moved = Event.new(summary="R: moved", start=start + timedelta(days=2, hours=5), uid=series.uid)
+        moved.component["DTEND"] = icalendar.vDDDTypes(start + timedelta(days=2, hours=6))
+        moved.component.add("RECURRENCE-ID", start + timedelta(days=2))
+        series.icalendar.add_component(moved.component)
+        series.icalendar.add_missing_timezones()
+        [stored] = self.seed(collection, [series])
+        assert isinstance(stored, SyncEvent)
+        return stored
+
+    def occurrences(self, collection: Collection, series: SyncItem) -> dict[int, SyncItem]:
+        """The series' occurrences, by day of the month of their RECURRENCE-ID."""
+        found = collection.search(event=True, start=at(1, 0), end=at(9, 0), expand=True)
+        return {i.component.decoded("RECURRENCE-ID").day: i for i in found if i.uid == series.uid}
+
+    def test_delete_one_occurrence(self, collection: Collection) -> None:
+        series = self.recurring_series(collection)
+        before = self.occurrences(collection, series)
+        assert sorted(before) == [1, 2, 3, 4, 5]
+        collection.delete(before[2])
+        with pytest.raises(NotFoundError):
+            collection.delete(before[2])  # already gone
+        collection.delete(before[3])  # the moved one
+        after = self.occurrences(collection, series)
+        assert sorted(after) == [1, 4, 5]
+        stored = collection.get(series.uid)
+        assert not stored.is_occurrence, "deleting an occurrence deleted the series"
+        dtstart = stored.component["DTSTART"]
+        exdates = stored.component.get("EXDATE")
+        exdates = exdates if isinstance(exdates, list) else [exdates]
+        assert sorted(d.dt for e in exdates for d in e.dts) == [
+            before[2].component.decoded("RECURRENCE-ID"),
+            before[3].component.decoded("RECURRENCE-ID"),
+        ]
+        assert all(e.params.get("TZID") == dtstart.params.get("TZID") for e in exdates), "EXDATE not in DTSTART's form"
+        assert not [c for c in stored.icalendar.walk("VEVENT") if "RECURRENCE-ID" in c], "the override was kept"
+
+    def test_delete_an_occurrence_read_before_a_sibling_was_deleted(self, collection: Collection) -> None:
+        series = self.recurring_series(collection)
+        read = self.occurrences(collection, series)
+        collection.delete(read[4])
+        collection.delete(read[5])  # its etag is stale, but the occurrence itself is unchanged (Q12)
+        assert sorted(self.occurrences(collection, series)) == [1, 2, 3]
+
+    def test_delete_an_occurrence_changed_since_it_was_read(self, collection: Collection) -> None:
+        series = self.recurring_series(collection)
+        read = self.occurrences(collection, series)
+        series.component["SUMMARY"] = "R: renamed"
+        collection.save(series)
+        with pytest.raises(ConflictError):
+            collection.delete(read[2])
+        collection.delete(read[2], overwrite=True)
+        assert sorted(self.occurrences(collection, series)) == [1, 3, 4, 5]
+
     # === relatives ====================================================
 
     def test_relatives(self, collection: Collection) -> None:
@@ -969,7 +1050,7 @@ class SyncConformance:
             self.assert_unsupported(collection, Feature.CHANGES, lambda: collection.changes())
             return
         kind = next(k for k in KINDS if holds(collection, k))
-        seeded = self.seed(collection, [KINDS[kind][0].new(summary=s) for s in ("one", "two")])
+        seeded = self.seed(collection, [minimal(kind, s) for s in ("one", "two")])
         changes = collection.changes()
         assert {i.native_id for i in changes.changed} >= {i.native_id for i in seeded}
         assert changes.deleted == []
@@ -1014,6 +1095,10 @@ class SyncConformance:
         assert result.deleted == [drop.native_id]
         with pytest.raises(ValueError, match="known"):
             collection.changes(result.token, known=known)
+        later = collection.add_task(summary="later")
+        following = collection.changes(result.token)  # a known= token is a token like any other
+        assert {i.native_id for i in following.changed} == {later.native_id}
+        assert following.deleted == []
 
     def test_a_bad_token_raises(self, collection: Collection) -> None:
         if level(collection, Feature.CHANGES) is Support.UNSUPPORTED:

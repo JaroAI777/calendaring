@@ -722,6 +722,14 @@ did not write the enforcement.
    has a thin, honestly typed shim over caldav — separate sync and async
    wrappers, or a `cast` at every call. With the shim, p4's static check would
    reach it too. That work is the same whichever design 1.3 builds.
+
+   *Settled in roadmap 2.1:* the shim is `_async/dav.py`, written once,
+   its sync twin generated like the rest. Each call resolves caldav's
+   `X | Coroutine` through `_awaited` (generated as `_returned`), which
+   also fails if the client is of the wrong mode. caldav's `AsyncDAVClient`
+   is imported through the mode-free `_caldav_io.py` and mapped to
+   `DAVClient`. mypy covers the backend; the shim's casts are the only
+   unchecked spots.
 6. **`check_ast.py` is a prototype, not the gate 1.3 needs (p2b).** The suite runs
    it (`test_static_check_passes_the_real_modules_and_catches_the_specimen`),
    but a review found three holes, each confirmed with a probe: it only knows

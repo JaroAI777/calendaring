@@ -36,11 +36,11 @@ Requirements:
    [issue #49](https://github.com/pycalendar/plann/issues/49) leaves
    credential storage to this library).
 
-## The format (F2): a `kind` key, with the keys `Backend.connect()` takes
+## The format (F2): a `kind` key, with the keys `Backend.open()` takes
 
 The structure is caldav's: named sections, `inherits`, meta-sections with
 `contains`, globs, `disable` and `${VAR}` expansion. A section is the
-keyword arguments of [`Backend.connect()`](API_DESIGN.md#22-backend):
+keyword arguments of [`Backend.open()`](API_DESIGN.md#22-backend):
 `url`, `username`, `password`, `token`, `kind` and backend-specific
 options.
 
@@ -76,12 +76,12 @@ everything:
   contains: [work, fastmail, notes, holidays, issues, legacy]
 ```
 
-- `kind` follows the rules `connect()` already has: a path or `file:`
+- `kind` follows the rules `open()` already has: a path or `file:`
   means files, `webcal:` means a feed, `http(s):` is probed for feed or
   CalDAV, and JMAP and the trackers must say `kind:`. Once the secret keys
   are resolved and the structural keys (`contains`, `inherits`, `disable`)
-  are removed, `Workspace.from_config()` calls `connect(**section)` for
-  each section, so new-style key names need no mapping. One gap: `connect()`
+  are removed, `Workspace.from_config()` calls `open(**section)` for
+  each section, so new-style key names need no mapping. One gap: `open()`
   takes `url` as a required argument, and a GitHub section needs none
   (`api.github.com` is the default). API_DESIGN §2.2 has to make `url`
   optional for such kinds.

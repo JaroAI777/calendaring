@@ -40,14 +40,14 @@ def at(day: int, hour: int = 12) -> datetime:
     return datetime(2026, 11, day, hour, tzinfo=UTC)
 
 
-def test_connect_picks_the_kind_from_the_url() -> None:
-    backend = Backend.connect("memory:", id="from-url")
+def test_open_picks_the_kind_from_the_url() -> None:
+    backend = Backend.open("memory:", id="from-url")
     assert isinstance(backend, MemoryBackend)
     assert backend.id == "from-url"
     with pytest.raises(ConfigurationError):
-        Backend.connect("https://caldav.example.com/")
+        Backend.open("gopher://calendar.example.com/")
     with pytest.raises(ConfigurationError):
-        Backend.connect("memory:", kind="no-such-kind")
+        Backend.open("memory:", kind="no-such-kind")
 
 
 def test_verify_catches_a_silent_drop() -> None:
@@ -173,15 +173,12 @@ def test_completed_is_utc() -> None:
     assert b"COMPLETED:20261101T120000Z" in task.to_ical()
 
 
-def test_deleting_an_occurrence_is_a_library_limitation() -> None:
+def test_an_occurrence_is_not_a_whole_object_for_wire() -> None:
     collection = MemoryBackend().collection("default")
     series = Event.new(summary="daily", start=at(1, 9), end=at(1, 10))
     series.component.add("RRULE", {"FREQ": "DAILY", "COUNT": 5})
     collection.add(series)
     first = (collection.search(event=True, start=at(2, 0), end=at(2, 23), expand=True))[0]
-    with pytest.raises(UnsupportedError) as info:
-        collection.delete(first)
-    assert info.value.feature is None
     with pytest.raises(ValueError, match="wire"):
         collection.save(first, wire=b"")
 
@@ -374,3 +371,31 @@ def test_the_default_token_scope_is_kind_backend_and_collection() -> None:
         (Backend(id="home").collection("default")).changes(token)
     # Another store under the same label: the default cannot tell them apart.
     (Backend(id="work").collection("default")).changes(token)
+
+
+def test_a_backend_from_a_missing_extra_says_what_to_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Backend, "_kinds", {k: v for k, v in Backend._kinds.items() if k != "caldav"})
+    with pytest.raises(ConfigurationError, match=r"pip install 'calendaring\[caldav\]'"):
+        Backend.open("https://caldav.example.com/", kind="caldav")
+
+
+def test_http_urls_are_caldav_until_the_feed_probe_exists() -> None:
+    pytest.importorskip("caldav")
+    backend = Backend.open("https://caldav.example.com/dav/", username="u", password="p")
+    with backend:
+        assert backend.kind == "caldav"
+
+
+def test_get_on_overrides_without_a_master_returns_the_earliest() -> None:
+    backend = MemoryBackend()
+    collection = backend.collection("default")
+    assert isinstance(collection, MemoryCollection)
+    later = Event.new(summary="later", start=at(5, 9), end=at(5, 10), uid="invited")
+    later.component.add("RECURRENCE-ID", at(5, 9))
+    earlier = Event.new(summary="earlier", start=at(2, 9), end=at(2, 10), uid="invited")
+    earlier.component.add("RECURRENCE-ID", at(2, 9))
+    later.icalendar.add_component(earlier.component)
+    collection.store.put(later.to_ical())
+    found = collection.get("invited")
+    assert found.is_occurrence
+    assert str(found.component["SUMMARY"]) == "earlier"

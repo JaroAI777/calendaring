@@ -344,7 +344,7 @@ Notes from doing it:
   project's own configuration, over the planted mistakes in
   `tests/specimens/` and asserts that exactly the marked lines are
   flagged, in both modes.  The correct calls in the same files are 0.2's
-  case 1, for the main entry points (`connect`, `collection`, `save`,
+  case 1, for the main entry points (`open`, `collection`, `save`,
   `complete`, `tasks`, `iter_search`, `search`).  The shapes the checkers miss, such as a missing `await` in a
   comprehension, are planted unmarked, so a checker that starts or stops
   catching one fails the test.  The plain `mypy` and `ruff check .` runs
@@ -404,8 +404,8 @@ therefore has a committed downstream consumer and should not be trimmed.
 - [x] Leave room for backends beyond the funded ones without format changes:
       GitHub first, then any plugin backend.  A section's `kind` names any
       registered backend; a GitHub section still needs `url` until
-      `connect()` makes it optional, a gap the
-      [configuration proposal](CONFIGURATION_PROPOSAL.md#the-format-f2-a-kind-key-with-the-keys-backendconnect-takes)
+      `open()` makes it optional, a gap the
+      [configuration proposal](CONFIGURATION_PROPOSAL.md#the-format-f2-a-kind-key-with-the-keys-backendopen-takes)
       notes.
 - [x] Document the format: calendaring-config's `docs/format.md`
 
@@ -471,8 +471,8 @@ therefore must not be trimmed, and it must land before `plann` reaches its Phase
 - [ ] Aggregation primitives sufficient for `plann`'s `sum_hours` — grouping a
       selection into budget lines with per-line subtotals, keeping committed and
       spent time separate
-- [ ] Coordinate the design with `plann` before freezing it; a review from its
-      author is cheap now and expensive after 1.0
+- [ ] Coordinate the design with `plann` before freezing it; a review of how
+      the design affects `plann` is cheap now and expensive after 1.0
 
 ---
 
@@ -492,27 +492,30 @@ and this is the backend that will expose every place the unified API and CalDAV
 disagree.
 
 **Tasks:**
-- [ ] Map the unified API onto `caldav` 3.x
-- [ ] Map caldav's compatibility-hint/quirk system onto the capability declaration
-- [ ] Handle the sync/async impedance between caldav's dual-mode design and
+- [x] Map the unified API onto `caldav` 3.x
+- [x] Map caldav's compatibility-hint/quirk system onto the capability declaration
+- [x] Handle the sync/async impedance between caldav's dual-mode design and
       p4 as 1.3 builds it — this is the interesting part, and the part most likely
       to overrun. caldav's `Async*` names are aliases of its dual-mode classes,
       so a thin, honestly typed shim is needed for type checking to work in
       this layer at all (see 0.2's comparison, *What is not settled*), and
       every caldav name needs a replacement-map entry so the generated sync
       layer imports names that exist (`SyncDAVClient` does not)
-- [ ] Settle [API_DESIGN Q12](API_DESIGN.md#10-open-questions) (`delete()` on an
+- [x] Settle [API_DESIGN Q12](API_DESIGN.md#10-open-questions) (`delete()` on an
       occurrence, and conflicts between sibling occurrences) before mapping
       `delete()` and `save()` for occurrences
-- [ ] Tune `verify=True`'s comparison against what real servers rewrite
+- [x] Tune `verify=True`'s comparison against what real servers rewrite
       (parameter quoting, split `CATEGORIES`, TZID to UTC), and compare
       subcomponents such as `VALARM` too; it compares raw unfolded lines today
       (roadmap 1.2 review)
-- [ ] Decide what `get(uid)` returns for a stored object holding several
+- [x] Decide what `get(uid)` returns for a stored object holding several
       overrides and no master; it returns the first today (roadmap 1.2 review)
-- [ ] Pass the conformance suite
-- [ ] Record, do not silently fix, bugs found in `caldav` itself: those fixes are
+- [x] Pass the conformance suite
+- [x] Record, do not silently fix, bugs found in `caldav` itself: those fixes are
       caldav's budget, not this project's
+      ([caldav #797](https://github.com/python-caldav/caldav/issues/797), its test
+      servers; the occurrence-deletion plan is on
+      [#598](https://github.com/python-caldav/caldav/issues/598))
 
 ---
 
@@ -700,7 +703,7 @@ effort is budgeted inside Phases 1 and 2.
 - **Dependencies:** 4.1
 
 **Tasks:**
-- [ ] Getting started: connect, list, read
+- [ ] Getting started: open, list, read
 - [ ] CRUD for events and for tasks
 - [ ] Searching and filtering
 - [ ] The same program run against three different backends — the project's whole

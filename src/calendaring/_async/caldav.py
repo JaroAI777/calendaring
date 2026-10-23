@@ -1,0 +1,264 @@
+# Hand-written source; tools/generate_sync.py derives ../_sync/caldav.py from this file.
+"""The CalDAV backend (roadmap 2.1), over the caldav library.
+
+It never calls caldav directly: ``dav.py`` beside it is the honestly typed
+per-mode layer (see ``_caldav_io.py``), so a missing ``await`` here is a type error.
+A ``native_id`` is the object's name within its calendar (the last segment
+of its href, unquoted), so ``add(native_id=...)`` names the resource.
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import json
+import re
+import uuid
+from collections.abc import Mapping, Sequence
+from typing import Any, ClassVar
+from urllib.parse import quote, unquote
+
+import icalendar
+from icalendar_searcher import Searcher
+
+from .._caldav_features import backend_capabilities, collection_capabilities
+from .._caldav_io import Calendar
+from ..capabilities import Feature
+from ..errors import (
+    AlreadyExistsError,
+    ConfigurationError,
+    ConflictError,
+    InvalidDataError,
+    NotFoundError,
+    SyncTokenError,
+)
+from ..items import _items_of, _parse
+from ..loss import LossPolicy
+from ..types import BrokenObject, Component, StoredObject, SyncToken
+from .backend import AsyncBackend
+from .collection import AsyncCollection
+from .dav import AsyncDAV
+
+__all__ = ["AsyncCalDAVBackend", "AsyncCalDAVCollection"]
+
+# The search flag caldav takes for each component.
+SEARCH_FLAG = {Component.EVENT: "event", Component.TASK: "todo", Component.JOURNAL: "journal"}
+
+# A UID made of these is used as the resource name, as caldav does; anything
+# else gets a random one, so no server has to agree on how to escape it.
+SAFE_NAME = re.compile(r"^[A-Za-z0-9._@-]{1,200}$")
+
+
+def _name_of(href: object) -> str:
+    return unquote(str(href).rstrip("/").rsplit("/", 1)[-1])
+
+
+class AsyncCalDAVCollection(AsyncCollection):
+    _backend: AsyncCalDAVBackend
+
+    def __init__(
+        self, backend: AsyncCalDAVBackend, calendar: Calendar, *, name: str | None, components: frozenset[Component]
+    ) -> None:
+        self.calendar = calendar
+        self.url = str(calendar.url).rstrip("/") + "/"
+        super().__init__(
+            backend,
+            id=_name_of(self.url),
+            name=name,
+            components=components,
+            capabilities=collection_capabilities(backend._dav.client.features, components),
+            native=calendar,
+        )
+
+    def _href(self, native_id: str) -> str:
+        return self.url + quote(native_id, safe="")
+
+    def _stored(self, obj: Any) -> StoredObject:
+        # raw_data is what the server sent; data is what caldav made of it, which is what gets parsed.
+        data = obj.data
+        parsed = _parse(data.encode() if isinstance(data, str) else bytes(data))
+        return StoredObject(_name_of(obj.url), obj.etag, parsed, obj.raw_data, obj)
+
+    def _listed(self, obj: Any) -> StoredObject | BrokenObject:
+        """As ``_stored``, but an object that does not parse is a ``BrokenObject`` with the server's bytes."""
+        try:
+            return self._stored(obj)
+        except InvalidDataError as exc:
+            return BrokenObject(_name_of(obj.url), obj.etag, obj.raw_data, exc)
+
+    async def _query(self, searcher: Searcher | None) -> list[StoredObject | BrokenObject]:
+        """Each kind the search can match, narrowed on the server only where that cannot under-match (A3)."""
+        found: dict[str, StoredObject | BrokenObject] = {}
+        for kind in sorted(self._kinds(searcher), key=lambda c: c.value):
+            flags: dict[str, Any] = {SEARCH_FLAG[kind]: True}
+            if kind is Component.TASK:
+                flags["include_completed"] = True
+            # The range goes to caldav as given.  CalDAV takes a range in UTC only, so floating
+            # times, all-day events and naive bounds need a wider window; caldav asks the server
+            # for a day more on each side and filters the result itself.  Widening again here
+            # would cost requests and gain nothing: that is the backend's job, and it does it.
+            if searcher is not None and kind.value in self.capabilities.details(Feature.SEARCH_TIME_RANGE).get(
+                "components", ()
+            ):
+                flags.update({k: v for k, v in (("start", searcher.start), ("end", searcher.end)) if v is not None})
+            for obj in await self._backend._dav.search(self.calendar, **flags):
+                stored = self._listed(obj)
+                found.setdefault(stored.native_id, stored)
+        return list(found.values())
+
+    def _kinds(self, searcher: Searcher | None) -> frozenset[Component]:
+        wanted = {kind for kind, flag in SEARCH_FLAG.items() if searcher is not None and getattr(searcher, flag, None)}
+        return self.components & wanted if wanted else self.components
+
+    async def _fetch(self, native_id: str) -> StoredObject:
+        for obj in await self._backend._dav.multiget(self.calendar, [self._href(native_id)]):
+            if obj.data is not None:  # caldav returns a missing href as an object without data
+                return self._stored(obj)
+        raise NotFoundError(f"no object {native_id!r}")
+
+    async def _fetch_many(self, native_ids: Any) -> list[StoredObject | BrokenObject]:
+        hrefs = [self._href(n) for n in native_ids]
+        if not hrefs:
+            return []
+        return [self._listed(o) for o in await self._backend._dav.multiget(self.calendar, hrefs) if o.data is not None]
+
+    async def _list_etags(self) -> dict[str, str]:
+        return {_name_of(href): etag for href, etag in (await self._backend._dav.etags(self.url)).items()}
+
+    async def _changes(
+        self, token: SyncToken | None, known: Mapping[str, str] | None
+    ) -> tuple[Sequence[StoredObject | BrokenObject], list[str], SyncToken]:
+        """The server's sync-collection report (RFC 6578) where it has one; else the inherited etag diff.
+
+        A token from the etag diff (``changes(known=...)``, or a server that
+        could not report everything at once) stays on the etag diff.
+        """
+        if self.capabilities.details(Feature.CHANGES).get("method") != "sync-token" or known is not None:
+            return await super()._changes(token, known)
+        if token is not None:
+            try:
+                server_token: str | None = self._decode_server_token(token)
+            except SyncTokenError:
+                return await super()._changes(token, None)  # an etag-listing token, from changes(known=...)
+        else:
+            server_token = None
+        hrefs, gone, new_token, incomplete = await self._backend._dav.sync(self.calendar, server_token)
+        if new_token is None or incomplete:
+            # caldav follows a truncated report itself; one it gave up on cannot be made complete here.
+            if server_token is None:
+                return await super()._changes(None, None)
+            raise SyncTokenError("the server's sync report was incomplete; start again with changes()")
+        deleted = {_name_of(href) for href in gone}
+        changed = [name for name in dict.fromkeys(_name_of(href) for href in hrefs) if name not in deleted]
+        return await self._fetch_many(changed), sorted(deleted), self._encode_server_token(new_token)
+
+    def _encode_server_token(self, server_token: str) -> SyncToken:
+        raw = json.dumps({"collection": self.id, "sync-token": server_token}, sort_keys=True).encode()
+        return SyncToken(base64.urlsafe_b64encode(raw).decode())
+
+    def _decode_server_token(self, token: SyncToken) -> str:
+        try:
+            data = json.loads(base64.urlsafe_b64decode(token.encode()))
+            issued_by = data["collection"]
+            server_token = data["sync-token"]
+        except (binascii.Error, ValueError, TypeError, KeyError) as exc:
+            raise SyncTokenError(f"not a token this collection issued: {token!r}") from exc
+        if issued_by != self.id or not isinstance(server_token, str):
+            raise SyncTokenError(f"a token from another collection: {issued_by!r}")
+        return server_token
+
+    async def _find_uid(self, uid: str) -> StoredObject:
+        return self._stored(await self._backend._dav.by_uid(self.calendar, uid))
+
+    async def _create(self, calendar: icalendar.Calendar, *, native_id: str | None, wire: bytes | None) -> StoredObject:
+        data = wire if wire is not None else calendar.to_ical()
+        first = _items_of(calendar)[0]
+        uid = str(first.get("UID", ""))
+        name = native_id or (f"{uid}.ics" if SAFE_NAME.match(uid) else f"{uuid.uuid4()}.ics")
+        try:
+            etag = await self._backend._dav.create(
+                self.calendar, self._href(name), data, str(first.name), raw=wire is not None
+            )
+        except AlreadyExistsError as exc:
+            if native_id is None:
+                exc.taken = "uid"  # the name was derived from the UID
+            raise
+        if etag is None:
+            return await self._fetch(name)
+        return StoredObject(name, etag, _parse(data))
+
+    async def _unless_changed(self, native_id: str, etag: str | None) -> str | None:
+        """The ETag to send as ``If-Match``.  A weak one cannot match (RFC 9110 §13.1.1), and caldav
+        would send the write unconditionally, so it is compared with a fresh read instead: a
+        window between the read and the write, where a strong ETag has none."""
+        if etag is None or not etag.startswith("W/"):
+            return etag
+        if (await self._fetch(native_id)).etag != etag:
+            raise ConflictError(f"{native_id!r} changed since it was read")
+        return None
+
+    async def _update(
+        self, native_id: str, calendar: icalendar.Calendar, *, etag: str | None, wire: bytes | None
+    ) -> StoredObject:
+        etag = await self._unless_changed(native_id, etag)
+        data = wire if wire is not None else calendar.to_ical()
+        kind = str(_items_of(calendar)[0].name)
+        new_etag = await self._backend._dav.update(
+            self.calendar, self._href(native_id), data, kind, etag, raw=wire is not None
+        )
+        if new_etag is None:
+            return await self._fetch(native_id)
+        return StoredObject(native_id, new_etag, _parse(data))
+
+    async def _delete(self, native_id: str, *, etag: str | None) -> None:
+        await self._backend._dav.delete(
+            self.calendar, self._href(native_id), await self._unless_changed(native_id, etag)
+        )
+
+    async def _set_name(self, name: str) -> None:
+        await self._backend._dav.set_display_name(self.calendar, name)
+
+    async def _delete_collection(self) -> None:
+        await self._backend._dav.delete_calendar(self.calendar)
+
+
+class AsyncCalDAVBackend(AsyncBackend):
+    """``AsyncBackend.open("https://...", kind="caldav", username=..., password=...)``."""
+
+    kind = "caldav"
+    collection_class: ClassVar[type[AsyncCalDAVCollection]] = AsyncCalDAVCollection
+
+    def __init__(self, dav: AsyncDAV, *, id: str, loss: LossPolicy | None = None, verify: bool | None = None) -> None:
+        self._dav = dav
+        super().__init__(
+            id=id, capabilities=backend_capabilities(dav.client.features), native=dav.client, loss=loss, verify=verify
+        )
+
+    @classmethod
+    async def _open(cls, url: str, **options: Any) -> AsyncCalDAVBackend:
+        if options.pop("session", None) is not None:
+            raise ConfigurationError("the caldav backend cannot use a caller's session yet")
+        token = options.pop("token", None)
+        if token is not None:
+            if options.get("password") is not None:
+                raise ConfigurationError("give a password or a token, not both")
+            options.update(password=token, auth_type="bearer")
+        loss = options.pop("loss", None)
+        verify = options.pop("verify", None)
+        backend_id = options.pop("id", None) or url
+        return cls(AsyncDAV(url, **options), id=backend_id, loss=loss, verify=verify)
+
+    async def _wrap(self, calendar: Calendar) -> AsyncCalDAVCollection:
+        components = frozenset(
+            Component(c) for c in await self._dav.supported_components(calendar) if c in {k.value for k in Component}
+        )
+        return self.collection_class(self, calendar, name=await self._dav.display_name(calendar), components=components)
+
+    async def collections(self) -> list[AsyncCollection]:
+        return [await self._wrap(c) for c in await self._dav.calendars()]
+
+    async def _create_collection(self, name: str, components: frozenset[Component]) -> AsyncCollection:
+        return await self._wrap(await self._dav.make_calendar(name, sorted(c.value for c in components)))
+
+    async def close(self) -> None:
+        await self._dav.close()

@@ -30,6 +30,11 @@ pre-commit install --hook-type pre-commit --hook-type pre-push --hook-type commi
 make test
 ```
 
+`make dev` also installs caldav and the embedded Xandikos and Radicale
+servers, which the CalDAV backend's conformance tests run against (they are
+skipped when missing).  Radicale listens on its default port, 5232, whatever
+caldav's test helper is told, so that port must be free.
+
 ## Sync and async code
 
 The async code in the `_async/` directories is the source; the `_sync/`
@@ -50,7 +55,14 @@ copy is stale, and it also rejects what a token rewrite cannot translate:
   equivalent go in `src/calendaring/_concurrency.py`, written once per mode,
   with an entry in the replacement map (`agather` -> `gather`);
 - a third-party `Async*` name, such as `httpx.AsyncClient`, would become a
-  `SyncClient` that does not exist: wrap it in the per-mode layer too;
+  `SyncClient` that does not exist: import it through a mode-free module and
+  map it in the replacement map, as `_caldav_io.py` does for caldav's
+  `AsyncDAVClient`;
+- a library whose methods return `X | Coroutine` (caldav's dual-mode
+  objects) hides a missing `await` from the type checker: call it only
+  through a thin, honestly typed wrapper in `_async/`, as `_async/dav.py`
+  does, where one helper resolves the union per mode (`_awaited`, which the
+  generator turns into `_returned`);
 - the token right after `await` is dropped, meant to be the space:
   write `await x`, never `await(x)`;
 - a name the generator renames must not sit inside an f-string, since
@@ -67,8 +79,8 @@ annotated, and do not silence an `unused-coroutine` error.
 1. Write it in `src/calendaring/_async/<name>.py` as `Async<Name>Backend`
    and `Async<Name>Collection`, subclassing `AsyncBackend` and
    `AsyncCollection`.  Set `kind = "<name>"` on the backend class, so
-   `Backend.connect(kind="<name>")` finds it.  The backend implements
-   `_connect` and `collections`; the collection implements the primitives
+   `Backend.open(kind="<name>")` finds it.  The backend implements
+   `_open` and `collections`; the collection implements the primitives
    (`_query`, `_fetch`, `_create`, `_update`, `_delete`).  Capability
    checks, loss policies, client-side filtering and the rest are written
    once in the base classes.  `_async/memory.py`, the reference backend,
@@ -82,7 +94,7 @@ annotated, and do not silence an `unused-coroutine` error.
 4. Run the generator, and import both modes from a public module (as
    `calendaring/memory.py` does).  Import that module in
    `calendaring/__init__.py`: a backend registers its `kind` when it is
-   imported, so until then `connect()` cannot find it.
+   imported, so until then `open()` cannot find it.
 5. Add `tests/_async/test_<name>_conformance.py`, with a class that
    subclasses `calendaring.testing.AsyncConformance` and returns the
    backend from `open_backend()`.  The generator writes the sync tests.

@@ -248,7 +248,7 @@ class AsyncWorkspace:
 whose `docs/format.md` specifies it ([roadmap 1.4](ROADMAP.md#14-configuration-and-credentials)).
 It makes one backend per section the name stands for, with the section's
 name as the backend's id.  It is a coroutine in async mode, since
-connecting may need the network; any problem with the file is a
+opening a backend may need the network; any problem with the file is a
 `ConfigurationError`.
 
 **Fan-out returns partial results.** `Workspace.collections` asks every
@@ -267,9 +267,9 @@ them in turn.
 ```python
 class AsyncBackend:
     @classmethod
-    async def connect(cls, url: str, *, username: str | None = None,
-                      password: str | None = None, token: str | None = None,
-                      kind: str | None = None, session: Any = None, **options: Any) -> AsyncBackend: ...
+    async def open(cls, url: str, *, username: str | None = None,
+                   password: str | None = None, token: str | None = None,
+                   kind: str | None = None, session: Any = None, **options: Any) -> AsyncBackend: ...
 
     id: str                      # stable, from config or derived from the URL
     kind: str                    # "caldav", "files", "feed", "jmap", "gitea", ...
@@ -282,25 +282,35 @@ class AsyncBackend:
     async def close(self) -> None: ...
 ```
 
-- `connect` returns the subclass for the kind it picks from the URL when
+- `open` returns the subclass for the kind it picks from the URL when
   `kind` is not given:
   `file:` or a path → files; `webcal:` → feed (fetched as `https:`, [prior art
-  Part 2](PRIOR_ART_AND_DECISIONS.md#part-2-standards)); `http(s):` → probe, which is [roadmap 2.3](ROADMAP.md#23-icalendar-feed-backend-read-only-http)'s "feed or CalDAV" detection;
+  Part 2](PRIOR_ART_AND_DECISIONS.md#part-2-standards)); `http(s):` → probe, which is [roadmap 2.3](ROADMAP.md#23-icalendar-feed-backend-read-only-http)'s "feed or CalDAV" detection (until then, `http(s):` means CalDAV, so an `https:` feed needs `kind="feed"`);
   RFC 6764 discovery for a bare domain comes from `caldav`. Trackers cannot
   be detected and need `kind=`.
+- *Renamed 2026-10-19 from `connect`:* for CalDAV, files and feeds
+  the factory does no network I/O (caldav's `DAVClient()` only builds an
+  object, and opening a file connects to nothing), so "connect"
+  over-promised.  It stays a coroutine in async mode, since JMAP fetches
+  its session resource and a tracker may check its token.
 - `session` is the caller-owned HTTP session that Home Assistant's
   `inject-websession` rule asks for ([prior art §1.4, Home Assistant](PRIOR_ART_AND_DECISIONS.md#14-home-assistant)). A backend that cannot use
   it raises `ConfigurationError` instead of silently making its own.
 - Credentials are never required in the URL or in plain-text configuration
-  ([roadmap 1.4](ROADMAP.md#14-configuration-and-credentials)'s keyring work); `connect`'s keyword arguments are for programmatic
+  ([roadmap 1.4](ROADMAP.md#14-configuration-and-credentials)'s keyring work); `open`'s keyword arguments are for programmatic
   use.
-- Open: which configuration keys a backend ignores.  The shared file keeps
-  keys such as `features`, `calendar_name`, `priority` and
-  `testing_allowed`, and `Workspace.from_config()` passes every key to
-  `connect()`; today a key the backend does not take is a
-  `ConfigurationError` naming the section.  Decided with the CalDAV
-  backend ([roadmap 2.1](ROADMAP.md#21-caldav-backend)), the first one
-  whose sections carry such keys.
+- *Decided 2026-10-19, with the CalDAV backend
+  ([roadmap 2.1](ROADMAP.md#21-caldav-backend)):* which configuration
+  keys a backend ignores.  Keys starting with `test_` are reserved for
+  test tooling, and `Workspace.from_config()` drops them before
+  `open()`.  Every other key reaches the backend, and one it does not
+  take is a `ConfigurationError` naming the section, so a typo is not
+  silently ignored.  The only such keys found are caldav's test-server
+  selection, `testing_allowed` and `priority`; caldav is to read
+  `test_allowed` and `test_priority` too (on
+  [caldav #786](https://github.com/python-caldav/caldav/issues/786)).
+  calendaring keeps no compatibility for the old names.  `features` is
+  not a test key: the CalDAV backend passes it to caldav.
 
 ### 2.3 Collection
 
@@ -340,7 +350,7 @@ class AsyncCollection:
                    wire: bytes | None = None,
                    loss: LossPolicy | None = None, verify: bool | None = None) -> AsyncItem: ...
                    # scope: occurrences only, see "Recurrence"; verify: see "What happens when ... unsupported"
-    async def delete(self, item: Item | str, *, overwrite: bool = False) -> None: ...
+    async def delete(self, item: Item | str, *, overwrite: bool = False) -> None: ...  # NotFoundError if gone
     async def complete(self, task: Task, at: datetime | None = None,
                        mode: Literal["safe", "this_and_future"] = "safe",
                        *, loss: LossPolicy | None = None, verify: bool | None = None) -> AsyncTask: ...
@@ -531,11 +541,12 @@ untouched (a conformance test proposed in [prior art Part 2](PRIOR_ART_AND_DECIS
 `wire` holds the stored object exactly as the backend returned it when the
 item was read: the body of a CalDAV `GET`, the `calendar-data` of a
 `calendar-query` or `calendar-multiget` response, the content of a vdir
-file. On CalDAV that means the raw response body, which `caldav` does not
-keep today: it runs incoming data through `vcal.fix()`, and its
-`wire_data` re-encodes that normalised copy. The CalDAV backend has to
-capture the body itself, or wait for `caldav` to keep it
-([caldav issue 763](https://github.com/python-caldav/caldav/issues/763)). It belongs to `etag`, and like `etag` it is a snapshot: an edit to
+file. On CalDAV it is `caldav`'s `raw_data` (caldav 3.6,
+[caldav issue 763](https://github.com/python-caldav/caldav/issues/763)),
+taken before `vcal.fix()` normalises the data: a `GET` body byte for
+byte, and from a `REPORT` the text of the `calendar-data` element, which
+the XML parser has already decoded (entities, and CRLF turned into LF).
+It belongs to `etag`, and like `etag` it is a snapshot: an edit to
 `component` does not change it, and a write sets it to `None`, because
 what the server stores may differ from what was sent (see "The content
 after a write" in [§2.3](#23-collection)); `reload()` reads it again.
@@ -656,7 +667,11 @@ does not carry. Occurrences come from three places:
   backend's choice ([§9](#9-migrating-from-caldav), `server_expand`);
 - a stored object that holds overrides without their master, which RFC 4791
   §4.1 allows, e.g. for an attendee invited to some instances only. The
-  backend hands out one occurrence item per override.
+  backend hands out one occurrence item per override. `get(uid)` returns
+  only the one with the earliest `RECURRENCE-ID` (decided 2026-10-19,
+  roadmap 2.1), since there is no master to be the whole item. This may
+  be a problem: a caller expecting `get()` to return everything under a
+  UID silently misses the other occurrences. `search()` returns them all.
 
 Several occurrences of one series are several items. They share a `uid`,
 and on a stored series they share a `native_id` and an `etag` too.
@@ -1044,7 +1059,7 @@ initial set:
 | `search.server-side`, `search.time-range`, `search.text` | how much the server filters; never affects results ([§4 Search](#4-search)) |
 | `changes` | `changes()`: `FULL` with a native token, `EMULATED` by listing |
 | `changes.known` | `changes(known=...)` fetches only what changed: `FULL` where etags can be listed without content (CalDAV, vdir), `EMULATED` where everything is read and compared (JMAP, single `.ics` file, feed, Gitea) |
-| `write.wire` | `add(wire=...)`, `save(wire=...)`: given bytes are sent as they are; `FULL` on CalDAV and vdir, `UNSUPPORTED` elsewhere |
+| `write.wire` | `add(wire=...)`, `save(wire=...)`: given bytes are sent as they are; `FULL` on vdir, and on CalDAV through caldav's `save(raw_data=...)` (caldav 3.6, [caldav #763](https://github.com/python-caldav/caldav/issues/763)); `UNSUPPORTED` elsewhere |
 | `write.conditional` | `FULL` with an atomic precondition (ETag, `content_version`); `EMULATED` read-compare-write |
 | `identity.client-uid`, `identity.foreign-id` | [§3.2 Identity](#32-identity) |
 | `identity.client-native-id` | `add(native_id=...)`: the caller may name the stored object (CalDAV href, vdir file name) |
@@ -1243,7 +1258,7 @@ Adopts vdirsyncer's contract ([prior art §1.2, vdirsyncer](PRIOR_ART_AND_DECISI
 
 | Backend | `etag` | `write.conditional` |
 |---|---|---|
-| CalDAV | the server's ETag | `FULL` (`If-Match`) |
+| CalDAV | the server's ETag | `FULL` (`If-Match`); for a weak ETag, which `If-Match` cannot match (GMX), a read-compare-write that can race |
 | files, vdir | `f"{st_mtime_ns};{st_ino}"` | `EMULATED`: compare, then atomic rename |
 | files, single `.ics` | hash of the item's serialisation | `EMULATED` |
 | feed | hash of the item's serialisation | n/a (read-only) |
@@ -1367,8 +1382,8 @@ not a live handle.
 
 The other direction also works: `collection.wrap(native_item)` turns a
 backend object (a `caldav.Todo`, say) into this library's item, bound to
-that collection, without I/O; `wire` stays `None` for a `caldav` object,
-whose `wire_data` is its normalised copy rather than the server's bytes
+that collection, without I/O; for a `caldav` object `wire` is its
+`raw_data`, `None` if it was not read from the server
 (see "The stored form" in [§3.1](#31-the-base-a-typed-view-over-icalendar)). Together with `.native` that lets code use both libraries side by side,
 which is what a migration needs
 ([§9 Migrating from caldav](#9-migrating-from-caldav)).
@@ -1383,7 +1398,7 @@ caldav's public API as of 2026-10-08 (caldav 3.4.0).
 
 | caldav | calendaring | |
 |---|---|---|
-| `get_davclient()`, `get_calendar(s)()`, config file | `Backend.connect()`, `Workspace.from_config()` | changed; same config file ([config proposal](CONFIGURATION_PROPOSAL.md)) |
+| `get_davclient()`, `get_calendar(s)()`, config file | `Backend.open()`, `Workspace.from_config()` | changed; same config file ([config proposal](CONFIGURATION_PROPOSAL.md)) |
 | `principal()`, `calendars()`, `make_calendar(supported_calendar_component_set=…)` | `backend.collections()`, `create_collection(components=…)` | same |
 | `get_supported_components()` | `collection.components` | same |
 | `search(…)`, `CalDAVSearcher` | `collection.search(…)` with a `Searcher` | same; caldav already post-filters client-side |
@@ -1622,38 +1637,39 @@ marked as not blocking; none blocks
     [what is in the way of a calendaring adapter](https://github.com/pycalendar/calendaring-sync/pull/19#issuecomment-6114023463);
     server evidence on calendaring-sync's
     [`evidence` branch](https://github.com/pycalendar/calendaring-sync/tree/evidence).
-12. *Deferred, 2026-10-13:* **Occurrence items: `delete()` and the shared etag**
+12. *Decided, 2026-10-19 (roadmap 2.1):* **Occurrence items: `delete()` and the shared etag**
     ([What an item contains](#what-an-item-contains)). Occurrences of one
     stored series share its `native_id` and `etag`, so the rules for a whole
-    object do not carry over. The proposals below are drafts. The author
-    recalls reasons for preferring `STATUS:CANCELLED` over `EXDATE`, to be
-    written down when this is settled.
-    [#398](https://github.com/python-caldav/caldav/issues/398) prefers
-    `CANCELLED` to raising an error from `delete()`, since a traceback will
-    reach some end user sooner or later. To be settled before
-    [roadmap 2.1](ROADMAP.md#21-caldav-backend) implements `delete()` on an
-    occurrence.
-    - **`delete(occurrence)`** must not delete the stored series, which
-      caldav may do today: caldav
-      [#398](https://github.com/python-caldav/caldav/issues/398) suspects
-      it, and nobody has tested it.
-      Two options. **`EXDATE`:** remove that occurrence's override, if
-      there is one, and add an `EXDATE` to the master. When there is no
-      master, remove the override, and delete the stored object only when
-      it was the last one. **`STATUS:CANCELLED`**, which #398 suggests and
-      the author leans towards: set it on the occurrence's override,
-      creating the override if needed. The occurrence stays visible as
-      cancelled, so this is an edit rather than a deletion.
-    - **Conflicts between siblings.** Saving one occurrence changes the
-      stored object's etag under its siblings. If a sibling's save then
-      required the etag it was read with, it would raise `ConflictError`
-      for an edit nobody made to it. **Proposal:** `save(occurrence)`
-      already fetches the stored object to merge into, so it raises only if
-      *that occurrence* changed since it was read, and writes with the
-      fresh etag. For an overridden occurrence the check is the override's
-      `SEQUENCE` or `LAST-MODIFIED`. A generated occurrence has no override,
-      and a concurrent edit of the master (its `RRULE`, its `DTSTART`)
-      changes it too, so there the check is the master's.
+    object do not carry over.
+    - **`delete(occurrence)` writes an `EXDATE`** on the master and removes
+      that occurrence's override, if there is one. When there is no master,
+      it removes the override, and deletes the stored object only when it was
+      the last one. The `EXDATE` takes the master's `DTSTART` form (a date, a
+      date-time in the same `TZID`, UTC or floating). The `EXDATE` bugs found
+      in clients (Exchange 2010, Lightning, khal) all came from comparing the
+      two in different forms.
+    - **Why not `STATUS:CANCELLED`**, which the author leaned towards, and
+      which caldav planned in
+      [#35](https://github.com/python-caldav/caldav/issues/35) and
+      [#598](https://github.com/python-caldav/caldav/issues/598):
+      "delete" and "cancel" are different operations, as #35 itself says.
+      A consumer that does not filter cancelled events shows a cancelled
+      override as live (Home Assistant until
+      [core #180947](https://github.com/home-assistant/core/pull/180947)), and
+      Home Assistant's own occurrence deletion
+      ([core #176565](https://github.com/home-assistant/core/pull/176565))
+      uses `EXDATE`. Cancelling an occurrence is a separate `cancel()`, not
+      built yet: it writes an override, so it waits for the
+      `save(occurrence)` merge (Q3).
+    - **Conflicts between siblings.** Saving or deleting one occurrence
+      changes the stored object's etag under its siblings. So `delete()`
+      fetches the stored object, and raises `ConflictError` only if *that
+      occurrence* changed since it was read: its override, or the
+      occurrence generated from the master (a changed `RRULE`, `DTSTART` or
+      `SUMMARY` changes it). It then writes with the fresh etag.
+      `overwrite=True` skips the check. An occurrence already gone is
+      `NotFoundError`. `save(occurrence)` will follow the
+      same rule when the merge (Q3) lands.
 13. *Decided, 2026-10-15* **Change tracking** (the reviewer's "borrowing",
     [PR 5 review](https://github.com/pycalendar/calendaring/pull/5#discussion_r4237509309)).
 

@@ -17,7 +17,7 @@ from calendaring import AsyncBackend, AsyncCollection, AsyncTask, AsyncWorkspace
 
 
 async def correct(backend: AsyncBackend, workspace: AsyncWorkspace, task: Task) -> str:
-    backend = await AsyncBackend.connect("memory:")
+    backend = await AsyncBackend.open("memory:")
     coll = await backend.collection("default")
     saved = await coll.save(task)
     await saved.save()
