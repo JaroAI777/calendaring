@@ -288,6 +288,19 @@ class AsyncBackend:
   Part 2](PRIOR_ART_AND_DECISIONS.md#part-2-standards)); `http(s):` → probe, which is [roadmap 2.3](ROADMAP.md#23-icalendar-feed-backend-read-only-http)'s "feed or CalDAV" detection (until then, `http(s):` means CalDAV, so an `https:` feed needs `kind="feed"`);
   RFC 6764 discovery for a bare domain comes from `caldav`. Trackers cannot
   be detected and need `kind=`.
+- The files backend picks its layout from the path (roadmap 2.2): a path
+  ending in `.ics` is a single file, one collection, created on the first
+  write; a directory with subdirectories is a root whose subdirectories are
+  the collections, as vdirsyncer writes them; a directory holding `.ics`
+  files or a `displayname` is one vdir collection (what khal's `path =`
+  names); an empty directory is a root.  Only a root can create and delete
+  collections.  A path that does not exist (other than a new `.ics` file in
+  an existing directory), or a file that is not `.ics`, is a
+  `ConfigurationError`.  The vdir spec has no
+  place for the components a collection holds (CalDAV's
+  `supported-calendar-component-set`), so a collection made for fewer than
+  all of them records them in a hidden `.calendaring-components` file,
+  which other tools ignore.
 - *Renamed 2026-10-19 from `connect`:* for CalDAV, files and feeds
   the factory does no network I/O (caldav's `DAVClient()` only builds an
   object, and opening a file connects to nothing), so "connect"

@@ -554,13 +554,18 @@ The README promises that the API works identically against local files and remot
 servers. That promise is what makes this more than a `glob()` call.
 
 **Tasks:**
-- [ ] Support both layouts: one directory of `.ics` files, and a single file
-- [ ] UID-to-filename mapping, including collisions and unsafe characters
-- [ ] Atomic writes and file locking
-- [ ] An ETag surrogate (mtime and/or content hash) for collision detection
-- [ ] A sync-token surrogate for change detection
-- [ ] Search via `icalendar-searcher`, so filtering behaves as it does server-side
-- [ ] Full CRUD, passing the conformance suite
+- [x] Support both layouts: one directory of `.ics` files, and a single file
+      (and a root directory of vdir collections, as vdirsyncer writes them)
+- [x] UID-to-filename mapping, including collisions and unsafe characters
+- [x] Atomic writes and file locking (a lock only for the single file, whose
+      writes are a read-modify-write of the whole file)
+- [x] An ETag surrogate (mtime and/or content hash) for collision detection
+- [x] A sync-token surrogate for change detection
+- [x] Search via `icalendar-searcher`, so filtering behaves as it does server-side
+- [x] Full CRUD, passing the conformance suite.  Occurrence edits and
+      recurring-task completion stay `UNSUPPORTED` until
+      [edit-icalendar](https://github.com/pycalendar/edit-icalendar) has
+      them (API_DESIGN Q3)
 
 ---
 
