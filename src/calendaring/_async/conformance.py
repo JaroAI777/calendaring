@@ -1273,10 +1273,11 @@ class AsyncConformance:
         [meeting] = await self.seed(collection, [Event.new(summary="planning", start=at(5, 9), end=at(5, 10))])
         if await self.assert_time_log_unsupported(collection, meeting) or not writable(collection):
             return
+        before = await collection.reload(meeting)  # as stored: a server may add to what was sent
         await meeting.log_time(start=at(5, 9), end=at(5, 10), users=("mailto:alice@example.com",))
         [entry] = await meeting.time_log()
         assert entry.duration == HOUR
-        assert await collection.reload(meeting) == meeting, "logging time does not touch the meeting itself"
+        assert await collection.reload(meeting) == before, "logging time does not touch the meeting itself"
 
     async def test_time_entries_in_a_range(self, collection: AsyncCollection) -> None:
         item = await self.logged_against(collection)

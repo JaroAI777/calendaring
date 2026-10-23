@@ -1273,10 +1273,11 @@ class SyncConformance:
         [meeting] = self.seed(collection, [Event.new(summary="planning", start=at(5, 9), end=at(5, 10))])
         if self.assert_time_log_unsupported(collection, meeting) or not writable(collection):
             return
+        before = collection.reload(meeting)  # as stored: a server may add to what was sent
         meeting.log_time(start=at(5, 9), end=at(5, 10), users=("mailto:alice@example.com",))
         [entry] = meeting.time_log()
         assert entry.duration == HOUR
-        assert collection.reload(meeting) == meeting, "logging time does not touch the meeting itself"
+        assert collection.reload(meeting) == before, "logging time does not touch the meeting itself"
 
     def test_time_entries_in_a_range(self, collection: Collection) -> None:
         item = self.logged_against(collection)
