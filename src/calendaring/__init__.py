@@ -55,6 +55,9 @@ from .types import BrokenObject, ChangeSet, Component, MultiResult, Scope, Store
 # Register the reference backend's kind ("memory") in both modes.
 from . import memory as _memory  # noqa: E402, F401  isort: skip
 
+# The files backend ("files"): plain paths and file: URLs.
+from . import files as _files  # noqa: E402, F401  isort: skip
+
 # The CalDAV backend ("caldav"), when the caldav extra is installed.  Checked rather than
 # caught, so that an ImportError inside calendaring's own modules is not mistaken for it.
 if _find_spec("caldav") is not None:

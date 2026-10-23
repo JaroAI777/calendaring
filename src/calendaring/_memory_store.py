@@ -16,7 +16,7 @@ from typing import Any
 
 import icalendar
 
-from .capabilities import BACKEND_FEATURES, Feature, Support
+from .capabilities import BACKEND_FEATURES, EDIT_ICALENDAR_PENDING, Feature, Support
 from .errors import AlreadyExistsError, ConflictError, InvalidDataError, NotFoundError
 from .items import _items_of, _parse
 from .types import Component
@@ -47,8 +47,6 @@ class Profile:
 
 F, L, E, U = Support.FULL, Support.LOSSY, Support.EMULATED, Support.UNSUPPORTED
 
-_PENDING = "pending recurring-ical-events issue 292 (API_DESIGN.md Q3)"
-
 FULL = Profile(
     "full",
     {
@@ -58,9 +56,9 @@ FULL = Profile(
         Feature.SEARCH_TEXT: E,
         Feature.CHANGES: {"level": E, "method": "etag-listing"},
         Feature.IDENTITY_FOREIGN_ID: {"level": U, "note": "the UID is native"},
-        Feature.RECURRENCE_EDIT_OCCURRENCE: {"level": U, "note": _PENDING},
+        Feature.RECURRENCE_EDIT_OCCURRENCE: {"level": U, "note": EDIT_ICALENDAR_PENDING},
         Feature.RECURRENCE_EDIT_THIS_AND_FUTURE: U,
-        Feature.TASK_COMPLETE_RECURRING: {"level": U, "note": _PENDING},
+        Feature.TASK_COMPLETE_RECURRING: {"level": U, "note": EDIT_ICALENDAR_PENDING},
     },
     frozenset(Component),
 )

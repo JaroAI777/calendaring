@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
-from typing import TypeVar
+from typing import ParamSpec, TypeVar
 
 from .errors import CalendaringError
 
 T = TypeVar("T")
+P = ParamSpec("P")
 
 
 async def agather(calls: Sequence[Callable[[], Awaitable[T]]]) -> list[T | CalendaringError]:
@@ -39,3 +40,13 @@ def gather(calls: Sequence[Callable[[], T]]) -> list[T | CalendaringError]:
         except CalendaringError as exc:
             out.append(exc)
     return out
+
+
+async def ato_thread(call: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    """Blocking I/O (the files backend's) in a worker thread, so an event loop is not held up."""
+    return await asyncio.to_thread(call, *args, **kwargs)
+
+
+def to_thread(call: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    """The sync twin of ``ato_thread``: just the call."""
+    return call(*args, **kwargs)

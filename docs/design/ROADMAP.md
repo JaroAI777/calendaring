@@ -293,10 +293,10 @@ Notes from doing it:
   `verify` are written once in the base class.
 - Two features were added to [§5.1](API_DESIGN.md#51-the-table):
   `recurrence.edit-occurrence` (saving one occurrence) and
-  `task.complete-recurring`. The reference backend declares both
-  `UNSUPPORTED` until the merge lands in `recurring_ical_events`
-  ([API_DESIGN Q3](API_DESIGN.md#10-open-questions)); the CalDAV backend
-  (2.1) can declare them `FULL` by calling caldav's code.
+  `task.complete-recurring`. Every backend, CalDAV included, declares
+  both `UNSUPPORTED` until
+  [edit-icalendar](https://github.com/pycalendar/edit-icalendar) has them
+  ([API_DESIGN Q3](API_DESIGN.md#10-open-questions)).
 - Sorting reads `icalendar_searcher.Searcher._sort_keys`, a private
   attribute; `test_search_sorts` catches a rename, and a public accessor
   belongs in icalendar-searcher.
@@ -554,13 +554,18 @@ The README promises that the API works identically against local files and remot
 servers. That promise is what makes this more than a `glob()` call.
 
 **Tasks:**
-- [ ] Support both layouts: one directory of `.ics` files, and a single file
-- [ ] UID-to-filename mapping, including collisions and unsafe characters
-- [ ] Atomic writes and file locking
-- [ ] An ETag surrogate (mtime and/or content hash) for collision detection
-- [ ] A sync-token surrogate for change detection
-- [ ] Search via `icalendar-searcher`, so filtering behaves as it does server-side
-- [ ] Full CRUD, passing the conformance suite
+- [x] Support both layouts: one directory of `.ics` files, and a single file
+      (and a root directory of vdir collections, as vdirsyncer writes them)
+- [x] UID-to-filename mapping, including collisions and unsafe characters
+- [x] Atomic writes and file locking (a lock only for the single file, whose
+      writes are a read-modify-write of the whole file)
+- [x] An ETag surrogate (mtime and/or content hash) for collision detection
+- [x] A sync-token surrogate for change detection
+- [x] Search via `icalendar-searcher`, so filtering behaves as it does server-side
+- [x] Full CRUD, passing the conformance suite.  Occurrence edits and
+      recurring-task completion stay `UNSUPPORTED` until
+      [edit-icalendar](https://github.com/pycalendar/edit-icalendar) has
+      them (API_DESIGN Q3)
 
 ---
 

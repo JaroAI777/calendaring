@@ -24,6 +24,8 @@ classifiers = [
 ]
 dependencies = [
   "calendaring-config>=0.1",
+  # The files backend's lock on a single .ics file, on every platform.
+  "filelock>=3.12",
   "icalendar>=7.3",
   "icalendar-searcher>=1.1",
   "recurring-ical-events>=3.8",

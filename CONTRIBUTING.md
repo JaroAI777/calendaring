@@ -53,7 +53,10 @@ copy is stale, and it also rejects what a token rewrite cannot translate:
 
 - `asyncio`, threads, sleeps and anything else with no token-for-token sync
   equivalent go in `src/calendaring/_concurrency.py`, written once per mode,
-  with an entry in the replacement map (`agather` -> `gather`);
+  with an entry in the replacement map (`agather` -> `gather`); blocking
+  I/O, such as the files backend's, goes through `await ato_thread(call, ...)`,
+  which runs it in a worker thread in the async mode and directly in the sync
+  one (`to_thread`);
 - a third-party `Async*` name, such as `httpx.AsyncClient`, would become a
   `SyncClient` that does not exist: import it through a mode-free module and
   map it in the replacement map, as `_caldav_io.py` does for caldav's

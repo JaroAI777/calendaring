@@ -43,8 +43,11 @@ REPLACEMENTS = {
     "AsyncMemoryCollection": "MemoryCollection",
     "AsyncCalDAVBackend": "CalDAVBackend",
     "AsyncCalDAVCollection": "CalDAVCollection",
+    "AsyncFilesBackend": "FilesBackend",
+    "AsyncFilesCollection": "FilesCollection",
     # the per-mode layer (calendaring/_concurrency.py)
     "agather": "gather",
+    "ato_thread": "to_thread",
     # the caldav bridge (_async/dav.py over calendaring/_caldav_io.py)
     "AsyncDAV": "DAV",
     "AsyncDAVClient": "DAVClient",

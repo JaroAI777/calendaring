@@ -15,7 +15,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from .capabilities import BACKEND_FEATURES, Capabilities, Capability, Feature, Support
+from .capabilities import (
+    BACKEND_FEATURES,
+    EDIT_ICALENDAR_PENDING,
+    NO_EVENTS_FOR_TIME_LOG,
+    Capabilities,
+    Capability,
+    Feature,
+    Support,
+)
 from .types import Component
 
 __all__ = ["backend_capabilities", "collection_capabilities"]
@@ -49,8 +57,6 @@ COMPONENT_FROM_SERVER = {
     Component.JOURNAL: (Feature.COMPONENT_JOURNAL, "save-load.journal"),
 }
 
-_PENDING = "pending recurring-ical-events issue 292 (API_DESIGN.md Q3)"
-
 # What the backend does the same way on every server, for now.
 FIXED: dict[Feature, Any] = {
     **dict.fromkeys(Feature, F),
@@ -60,9 +66,9 @@ FIXED: dict[Feature, Any] = {
     Feature.CHANGES: {"level": E, "method": "etag-listing"},
     Feature.MOVE: {"level": E, "note": "added to the target, then deleted here"},
     Feature.IDENTITY_FOREIGN_ID: {"level": U, "note": "the UID is native"},
-    Feature.RECURRENCE_EDIT_OCCURRENCE: {"level": U, "note": _PENDING},
+    Feature.RECURRENCE_EDIT_OCCURRENCE: {"level": U, "note": EDIT_ICALENDAR_PENDING},
     Feature.RECURRENCE_EDIT_THIS_AND_FUTURE: U,
-    Feature.TASK_COMPLETE_RECURRING: {"level": U, "note": _PENDING},
+    Feature.TASK_COMPLETE_RECURRING: {"level": U, "note": EDIT_ICALENDAR_PENDING},
 }
 
 
@@ -154,5 +160,5 @@ def collection_capabilities(features: Any, components: frozenset[Component]) -> 
     for kind, (feature, name) in COMPONENT_FROM_SERVER.items():
         table[feature] = _level(features, name) if kind in components else U
     if Component.EVENT not in components:  # time entries are VEVENTs in the item's own collection
-        table[Feature.TIME_LOG] = {"level": U, "note": "holds no events to log time in; set time_log_collection"}
+        table[Feature.TIME_LOG] = {"level": U, "note": NO_EVENTS_FOR_TIME_LOG}
     return Capabilities({f: Capability.coerce(v) for f, v in table.items()})

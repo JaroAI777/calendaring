@@ -288,6 +288,19 @@ class AsyncBackend:
   Part 2](PRIOR_ART_AND_DECISIONS.md#part-2-standards)); `http(s):` → probe, which is [roadmap 2.3](ROADMAP.md#23-icalendar-feed-backend-read-only-http)'s "feed or CalDAV" detection (until then, `http(s):` means CalDAV, so an `https:` feed needs `kind="feed"`);
   RFC 6764 discovery for a bare domain comes from `caldav`. Trackers cannot
   be detected and need `kind=`.
+- The files backend picks its layout from the path (roadmap 2.2): a path
+  ending in `.ics` is a single file, one collection, created on the first
+  write; a directory with subdirectories is a root whose subdirectories are
+  the collections, as vdirsyncer writes them; a directory holding `.ics`
+  files or a `displayname` is one vdir collection (what khal's `path =`
+  names); an empty directory is a root.  Only a root can create and delete
+  collections.  A path that does not exist (other than a new `.ics` file in
+  an existing directory), or a file that is not `.ics`, is a
+  `ConfigurationError`.  The vdir spec has no
+  place for the components a collection holds (CalDAV's
+  `supported-calendar-component-set`), so a collection made for fewer than
+  all of them records them in a hidden `.calendaring-components` file,
+  which other tools ignore.
 - *Renamed 2026-10-19 from `connect`:* for CalDAV, files and feeds
   the factory does no network I/O (caldav's `DAVClient()` only builds an
   object, and opening a file connects to nothing), so "connect"
@@ -460,9 +473,12 @@ interval after the actual completion" (org-mode's `.+1w`). That reads into
 `RRULE` something the RFC does not say, and is dropped. The next start
 follows the `RRULE`, and the interval-from-completion behaviour applies only
 when an `X-` property asks for it
-([recurring-ical-events issue 292](https://github.com/niccokunzmann/python-recurring-ical-events/issues/292)).
-The `icalendar` manipulation goes to `recurring_ical_events`, and the I/O
-stays here ([§10 Open questions](#10-open-questions), Q3).
+(proposed in
+[recurring-ical-events issue 292](https://github.com/niccokunzmann/python-recurring-ical-events/issues/292)).
+The `icalendar` manipulation goes to
+[edit-icalendar](https://github.com/pycalendar/edit-icalendar), and the I/O
+stays here ([§10 Open questions](#10-open-questions), Q3).  Until then,
+every backend declares `task.complete-recurring` `UNSUPPORTED`.
 
 **`relatives`** fetches the objects an item's `RELATED-TO` points at (and,
 for `PARENT`, the children pointing back), as caldav's `get_relatives()`
@@ -1053,8 +1069,10 @@ up `_complete_recurring_<mode>`, and that method is spelled
 spelling, and the mismatch is reported as
 [caldav issue 735](https://github.com/python-caldav/caldav/issues/735).)
 Completing the occurrence is `icalendar` manipulation, which goes to
-`recurring_ical_events`; fetching and storing stay here
-([§10 Open questions](#10-open-questions), Q3).
+[edit-icalendar](https://github.com/pycalendar/edit-icalendar); fetching and
+storing stay here ([§10 Open questions](#10-open-questions), Q3).  Until
+edit-icalendar has it, every backend declares `task.complete-recurring`
+`UNSUPPORTED`, the CalDAV backend included.
 
 [§9 Migrating from caldav](#9-migrating-from-caldav) compares the whole of
 caldav's API with this one.
@@ -1649,6 +1667,14 @@ marked as not blocking; none blocks
    a draft as of 2026-10-12 ([§3.7](#37-recurrence)). Its README also
    covers editing and deleting single occurrences, so the merge above may
    move there too, despite "no extra package" earlier in this question.
+   *Decided by the author, 2026-10-23:* all of it, the occurrence merge
+   and recurring-task completion included, goes to edit-icalendar, which
+   supersedes recurring-ical-events issue 292.  Until edit-icalendar has
+   it, every backend declares `recurrence.edit-occurrence`,
+   `recurrence.edit-this-and-future` and `task.complete-recurring`
+   `UNSUPPORTED`, the CalDAV backend included: it neither copies nor
+   calls caldav's code for them, so the "interval after completion"
+   guess above is not inherited either.
 4. *Decided, 2026-10-10:* **`verify=True`** on writes is in from the first
    release ([§5.3 What happens when the caller asks for something unsupported](#53-what-happens-when-the-caller-asks-for-something-unsupported)).
 5. *Resolved, 2026-10-09:* assignees are `ATTENDEE`s with the tracker's
@@ -1844,7 +1870,8 @@ video calls. What it changed:
 the item base class is `Item` and carries no iCalendar properties of
 its own ([§3.1](#31-the-base-a-typed-view-over-icalendar)); what an item may
 hold is spelled out ([What an item contains](#what-an-item-contains)); the
-occurrence merge goes to `recurring_ical_events` (Q3); and change tracking is
+occurrence merge goes to `recurring_ical_events` (Q3; moved to edit-icalendar
+on 2026-10-23); and change tracking is
 Q13, which decided on 2026-10-12 how writes are tracked (a tracked subclass
 of the `icalendar` components, pending icalendar issue 1914; replaced on
 2026-10-15 by unconditional saves), and [§12](#12-beyond-the-funded-scope-implicit-synchronization)

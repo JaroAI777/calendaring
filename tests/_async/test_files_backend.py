@@ -1,0 +1,83 @@
+# Hand-written source; tools/generate_sync.py derives ../_sync/ from this file.
+"""Files backend behaviour the conformance suite does not set up (roadmap 2.2)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from urllib.parse import quote
+
+import pytest
+
+from calendaring import (
+    AsyncBackend,
+    AsyncWorkspace,
+    Component,
+    ConfigurationError,
+    Feature,
+    Support,
+    SyncTokenError,
+)
+from calendaring.files import AsyncFilesBackend
+
+
+async def test_a_config_section_names_a_path_or_a_file_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CALDAV_URL", raising=False)
+    calendars = tmp_path / "calendars"
+    calendars.mkdir()
+    single = tmp_path / "with space" / "home.ics"
+    single.parent.mkdir()
+    config = tmp_path / "calendar.json"
+    config.write_text(
+        json.dumps({"todo": {"url": str(calendars)}, "home": {"kind": "files", "url": "file://" + quote(str(single))}})
+    )
+    workspace = await AsyncWorkspace.from_config(config, section="todo")
+    [backend] = workspace.backends
+    assert isinstance(backend, AsyncFilesBackend)
+    assert (backend.layout, backend.path) == ("root", calendars)
+    [home] = (await AsyncWorkspace.from_config(config, section="home")).backends
+    assert isinstance(home, AsyncFilesBackend)
+    assert (home.layout, home.path) == ("file", single)
+
+
+async def test_an_option_the_backend_does_not_take_is_a_configuration_error(tmp_path: Path) -> None:
+    with pytest.raises(ConfigurationError):
+        await AsyncBackend.open(str(tmp_path), calendar_url="https://example.invalid/")
+
+
+async def test_a_vdir_written_elsewhere_is_read_with_its_metadata(tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "displayname").write_text("Work\n")
+    (work / "color").write_text("#00ff00\n")
+    (work / "meeting.ics").write_bytes(
+        b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//khal//EN\r\nBEGIN:VEVENT\r\nUID:meeting\r\n"
+        b"DTSTAMP:20261001T000000Z\r\nDTSTART:20261105T090000Z\r\nSUMMARY:standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    backend = await AsyncBackend.open(str(tmp_path))
+    [collection] = await backend.collections()
+    assert (collection.id, collection.name, collection.color) == ("work", "Work", "#00ff00")
+    [event] = await collection.events()
+    assert (event.native_id, str(event.component["SUMMARY"])) == ("meeting.ics", "standup")
+
+
+async def test_a_token_is_bound_to_the_path_not_the_backend_id(tmp_path: Path) -> None:
+    collections = []
+    for name in ("one", "two"):
+        root = tmp_path / name
+        root.mkdir()
+        backend = await AsyncBackend.open(str(root), id="same-section-name")
+        collections.append(await backend.create_collection("tasks", components=[Component.TASK]))
+    await collections[0].add_task(summary="x")
+    token = (await collections[0].changes()).token
+    with pytest.raises(SyncTokenError):
+        await collections[1].changes(token)
+
+
+async def test_a_collection_without_events_has_nowhere_to_log_time(tmp_path: Path) -> None:
+    backend = await AsyncBackend.open(str(tmp_path))
+    tasks = await backend.create_collection("tasks", components=[Component.TASK])
+    both = await backend.create_collection("both", components=[Component.TASK, Component.EVENT])
+    assert tasks.capabilities.level(Feature.TIME_LOG) is Support.UNSUPPORTED
+    assert "time_log_collection" in (tasks.capabilities[Feature.TIME_LOG].note or "")
+    assert both.capabilities.level(Feature.TIME_LOG) is Support.FULL
