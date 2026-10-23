@@ -1356,6 +1356,8 @@ class SyncConformance:
                     self._made.append(attempted)
             assert attempted.components == frozenset({Component.TASK})
             assert attempted.id in [c.id for c in backend.collections()]
+            for kind, (_, _, _, _, feature) in KINDS.items():
+                assert (kind == Component.TASK) == (level(attempted, feature) is not Support.UNSUPPORTED), feature
             return
         if not backend.capabilities.supports(Feature.CREATE_COLLECTION):
             with pytest.raises(UnsupportedError) as info:
@@ -1370,6 +1372,8 @@ class SyncConformance:
             made = backend.create_collection("conformance-new", components=(Component.TASK,))
         assert made.components == frozenset({Component.TASK})
         assert made.id in [c.id for c in backend.collections()]
+        for kind, (_, _, _, _, feature) in KINDS.items():
+            assert (kind == Component.TASK) == (level(made, feature) is not Support.UNSUPPORTED), feature
         if not deletable:
             with pytest.raises(UnsupportedError) as info:
                 made.delete_collection()
