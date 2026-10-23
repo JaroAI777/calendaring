@@ -1309,7 +1309,9 @@ reloaded and compared with what was sent. The comparison covers every
 property that was sent, after normalisation, except those the mapper had
 already reported as not storable (a lossy write, above), and skips what
 servers legitimately change: `DTSTAMP`, `SEQUENCE`, `LAST-MODIFIED`, property
-order, and the identity a backend assigns (`uid`, `native_id`, `etag`;
+and parameter order, a parameter spelt out at its RFC 5545 default
+(`PARTSTAT=NEEDS-ACTION`, `RSVP=FALSE`, ...), and the identity a backend
+assigns (`uid`, `native_id`, `etag`;
 [§3.2 Identity](#32-identity)). A difference raises `VerificationError`
 listing what the server dropped or changed. It is not a `LossyWriteError`:
 that one means nothing was sent, while a `VerificationError` means the

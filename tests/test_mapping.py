@@ -101,3 +101,35 @@ def test_an_alarm_the_server_annotated_is_no_difference() -> None:
     assert differences(sent.icalendar, stored) == []
     alarm["TRIGGER"] = icalendar.vDDDTypes(timedelta(minutes=-5))
     assert [d.property for d in differences(sent.icalendar, stored)] == ["VALARM"]
+
+
+def stored_as(event: Event, line: str) -> icalendar.Calendar:
+    """``event`` as a server stored it, its one ATTENDEE rewritten to ``line``."""
+    text = event.icalendar.to_ical().decode().replace("ATTENDEE;CN=Bob:mailto:bob@example.com", line)
+    return icalendar.Calendar.from_ical(text)
+
+
+def test_a_parameter_added_with_its_default_is_no_difference() -> None:
+    sent = Event.new(summary="x", start=datetime(2026, 11, 3, 9, tzinfo=UTC))
+    sent.component.add("ATTENDEE", "mailto:bob@example.com", parameters={"CN": "Bob"})
+    defaults = (
+        "ATTENDEE;CUTYPE=individual;PARTSTAT=NEEDS-ACTION;ROLE=REQ-PARTICIPANT;CN=Bob;RSVP=FALSE:mailto:bob@example.com"
+    )
+    assert differences(sent.icalendar, stored_as(sent, defaults)) == []
+    rsvp = "ATTENDEE;CN=Bob;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:bob@example.com"
+    assert [d.property for d in differences(sent.icalendar, stored_as(sent, rsvp))] == ["ATTENDEE"]
+
+
+def test_an_unescaped_comma_is_a_difference_and_parameter_lists_are_sets() -> None:
+    sent = icalendar.Calendar.from_ical(
+        "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:u\r\nRESOURCES:projector\\, big\r\n"
+        'ATTENDEE;DELEGATED-TO="mailto:a@example.com","mailto:b@example.com":mailto:c@example.com\r\n'
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    )
+    text = sent.to_ical().decode()
+    split = icalendar.Calendar.from_ical(text.replace("projector\\, big", "projector,big"))
+    assert [d.property for d in differences(sent, split)] == ["RESOURCES"]
+    swapped = text.replace(
+        '"mailto:a@example.com","mailto:b@example.com"', '"mailto:b@example.com","mailto:a@example.com"'
+    )
+    assert differences(sent, icalendar.Calendar.from_ical(swapped)) == []
