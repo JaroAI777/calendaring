@@ -8,7 +8,15 @@ from enum import Enum, StrEnum
 from types import MappingProxyType
 from typing import Any
 
-__all__ = ["BACKEND_FEATURES", "Capabilities", "Capability", "Feature", "Support"]
+__all__ = [
+    "BACKEND_FEATURES",
+    "EDIT_ICALENDAR_PENDING",
+    "NO_EVENTS_FOR_TIME_LOG",
+    "Capabilities",
+    "Capability",
+    "Feature",
+    "Support",
+]
 
 
 class Support(Enum):
@@ -65,6 +73,12 @@ class Feature(StrEnum):
 
 # Declared on the backend rather than on a collection (§5.2).
 BACKEND_FEATURES = frozenset({Feature.CREATE_COLLECTION, Feature.DELETE_COLLECTION})
+
+# Capability notes for backends to share, in-tree and out, so the capability matrix reads the same.
+# Why occurrence edits and recurring-task completion are UNSUPPORTED for now:
+EDIT_ICALENDAR_PENDING = "pending edit-icalendar (API_DESIGN.md Q3)"
+# Why time-log is UNSUPPORTED in a collection holding no events (entries are VEVENTs):
+NO_EVENTS_FOR_TIME_LOG = "holds no events to log time in; set time_log_collection"
 
 
 @dataclass(frozen=True)

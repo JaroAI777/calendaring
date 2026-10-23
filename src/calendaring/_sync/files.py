@@ -22,7 +22,7 @@ from icalendar_searcher import Searcher
 
 from .._concurrency import to_thread
 from .._files_store import Entry, IcsFile, Vdir, collections, layout, make_collection
-from ..capabilities import Capabilities, Feature, Support
+from ..capabilities import EDIT_ICALENDAR_PENDING, NO_EVENTS_FOR_TIME_LOG, Capabilities, Feature, Support
 from ..errors import ConfigurationError, InvalidDataError
 from ..items import _parse
 from ..loss import LossPolicy
@@ -33,8 +33,6 @@ from .collection import Collection
 __all__ = ["FilesBackend", "FilesCollection"]
 
 F, E, U = Support.FULL, Support.EMULATED, Support.UNSUPPORTED
-
-_PENDING = "pending recurring-ical-events issue 292 (API_DESIGN.md Q3)"
 
 
 def collection_capabilities(single_file: bool, components: frozenset[Component]) -> Capabilities:
@@ -48,9 +46,9 @@ def collection_capabilities(single_file: bool, components: frozenset[Component])
         Feature.WRITE_CONDITIONAL: {"level": E, "note": "the etag is compared, then the file replaced"},
         Feature.MOVE: {"level": E, "note": "added to the target, then deleted here"},
         Feature.IDENTITY_FOREIGN_ID: {"level": U, "note": "the UID is native"},
-        Feature.RECURRENCE_EDIT_OCCURRENCE: {"level": U, "note": _PENDING},
+        Feature.RECURRENCE_EDIT_OCCURRENCE: {"level": U, "note": EDIT_ICALENDAR_PENDING},
         Feature.RECURRENCE_EDIT_THIS_AND_FUTURE: U,
-        Feature.TASK_COMPLETE_RECURRING: {"level": U, "note": _PENDING},
+        Feature.TASK_COMPLETE_RECURRING: {"level": U, "note": EDIT_ICALENDAR_PENDING},
     }
     if single_file:
         table.update(
@@ -62,7 +60,7 @@ def collection_capabilities(single_file: bool, components: frozenset[Component])
             }
         )
     if Component.EVENT not in components:  # time entries are VEVENTs in the item's own collection
-        table[Feature.TIME_LOG] = {"level": U, "note": "holds no events to log time in; set time_log_collection"}
+        table[Feature.TIME_LOG] = {"level": U, "note": NO_EVENTS_FOR_TIME_LOG}
     for feature in (Feature.CREATE_COLLECTION, Feature.DELETE_COLLECTION):
         del table[feature]
     return Capabilities(table)

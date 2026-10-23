@@ -7,8 +7,7 @@ identity), a writable one without most optional features, and a read-only
 feed.  Three more here reach the branches those leave out; CI checks the
 branch coverage of the suite.  The supported branches of
 ``recurrence.edit-occurrence``, ``recurrence.edit-this-and-future`` and
-``task.complete-recurring`` wait for the merge in recurring-ical-events
-(API_DESIGN.md Q3).
+``task.complete-recurring`` wait for edit-icalendar (API_DESIGN.md Q3).
 
 The second half is backends that each break one rule, and the suite test
 that must catch it: a test that cannot fail tests nothing.
