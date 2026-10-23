@@ -1,5 +1,5 @@
 # Hand-written source; tools/generate_sync.py derives ../_sync/ from this file.
-"""The caldav backend passes the conformance suite against embedded Xandikos and Radicale."""
+"""The caldav backend passes the conformance suite on every CalDAV server ``caldav_server`` gives (see conftest)."""
 
 from __future__ import annotations
 
@@ -17,22 +17,10 @@ class CalDAVConformance(AsyncConformance):
     server: Any
 
     async def open_backend(self) -> AsyncBackend:
-        return await AsyncBackend.open(
-            self.server.url,
-            kind="caldav",
-            username=self.server.username,
-            password=self.server.password,
-            features=self.server.config["features"],
-        )
+        return await AsyncBackend.open(self.server.url, kind="caldav", **self.server.options)
 
 
-class TestXandikos(CalDAVConformance):
+class TestCalDAVServers(CalDAVConformance):
     @pytest.fixture(autouse=True)
-    def _server(self, xandikos_server: Any) -> None:
-        self.server = xandikos_server
-
-
-class TestRadicale(CalDAVConformance):
-    @pytest.fixture(autouse=True)
-    def _server(self, radicale_server: Any) -> None:
-        self.server = radicale_server
+    def _server(self, caldav_server: Any) -> None:
+        self.server = caldav_server

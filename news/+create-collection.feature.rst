@@ -1,0 +1,1 @@
+``create_collection()`` refuses to make a collection that would hold none of the requested components, raising ``UnsupportedError``.  Where a server ignores the requested components, as SOGo does, the ``create-collection`` capability says so (``LOSSY``), and the collection's ``components`` say what it actually holds.

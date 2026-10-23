@@ -28,7 +28,7 @@ from ..items import _parse
 from ..loss import LossPolicy
 from ..types import BrokenObject, Component, StoredObject
 from .backend import AsyncBackend
-from .collection import AsyncCollection
+from .collection import COMPONENT_FEATURE, AsyncCollection
 
 __all__ = ["AsyncFilesBackend", "AsyncFilesCollection"]
 
@@ -59,6 +59,9 @@ def collection_capabilities(single_file: bool, components: frozenset[Component])
                 Feature.COLLECTION_SET_NAME: U,
             }
         )
+    for kind, feature in COMPONENT_FEATURE.items():
+        if kind not in components:
+            table[feature] = U
     if Component.EVENT not in components:  # time entries are VEVENTs in the item's own collection
         table[Feature.TIME_LOG] = {"level": U, "note": NO_EVENTS_FOR_TIME_LOG}
     for feature in (Feature.CREATE_COLLECTION, Feature.DELETE_COLLECTION):

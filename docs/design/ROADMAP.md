@@ -679,7 +679,9 @@ rebuilding it, which is why 8 hours is plausible where a from-scratch effort wou
 be four times that.
 
 **Tasks:**
-- [ ] Run this library's conformance suite through the existing docker test servers
+- [x] Run this library's conformance suite through the existing docker test servers
+      (`pytest --caldav-servers=...`), along with readable scenario tests;
+      run on Baikal and SOGo so far
 - [ ] Confirm the capability declarations match observed behaviour per server
 - [ ] File server-specific divergences as issues; fixing quirks in the caldav
       library is caldav's budget

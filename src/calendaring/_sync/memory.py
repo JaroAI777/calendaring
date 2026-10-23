@@ -22,7 +22,7 @@ from ..errors import ConflictError, InvalidDataError
 from ..items import Item
 from ..loss import LossPolicy
 from ..types import BrokenObject, Component, StoredObject
-from .backend import Backend
+from .backend import Backend, _none_held
 from .collection import Collection
 
 __all__ = ["MemoryBackend", "MemoryCollection"]
@@ -154,6 +154,8 @@ class MemoryBackend(Backend):
         return super().collection(name_or_id)
 
     def _create_collection(self, name: str, components: frozenset[Component]) -> Collection:
+        if components and not components & self.profile.components:
+            raise _none_held(components, self.id)
         id = name
         while id in self.store.calendars:
             id = f"{name}-{self.store.next()}"

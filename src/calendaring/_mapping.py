@@ -15,6 +15,7 @@ from datetime import UTC, date, datetime, time
 from typing import Any
 
 import icalendar
+from icalendar.parser import Contentline
 
 from .capabilities import Capabilities, Feature, Support
 from .items import X_PLANNED_END, X_PLANNED_START
@@ -62,6 +63,18 @@ RELTYPE_FEATURE: dict[str, Feature] = {
     "PARENT": Feature.TASK_RELATIONS_PARENT,
     "CHILD": Feature.TASK_RELATIONS_PARENT,
     "SIBLING": Feature.TASK_RELATIONS_PARENT,
+}
+
+# RFC 5545 §3.2's parameter defaults: a server that spells one out has changed nothing.
+PARAMETER_DEFAULTS = {
+    "CUTYPE": "INDIVIDUAL",
+    "ENCODING": "8BIT",
+    "FBTYPE": "BUSY",
+    "PARTSTAT": "NEEDS-ACTION",
+    "RELATED": "START",
+    "RELTYPE": "PARENT",
+    "ROLE": "REQ-PARTICIPANT",
+    "RSVP": "FALSE",
 }
 
 # Single date-time properties a server may store in UTC instead of with their TZID.
@@ -229,6 +242,7 @@ def property_lines(component: icalendar.Component, name: str) -> list[bytes]:
 def _comparable(component: icalendar.Component, name: str) -> list[Any]:
     """What ``verify`` compares for a property, so that a server's harmless rewrites compare equal.
 
+    A parameter at its RFC 5545 default is the same as none, and parameters are in any order.
     ``CATEGORIES`` is a set however it is split over lines and commas, and
     an aware date-time on a single event is an instant, whether it is stored
     with its TZID or in UTC.  A floating time is not an instant, and in a
@@ -240,7 +254,26 @@ def _comparable(component: icalendar.Component, name: str) -> list[Any]:
         value = component.decoded(name)
         if isinstance(value, datetime) and value.tzinfo is not None:
             return [value.astimezone(UTC)]
-    return list(property_lines(component, name))
+    return sorted(_without_defaults(line) for line in property_lines(component, name))
+
+
+def _without_defaults(line: bytes) -> tuple[Any, ...]:
+    """A content line with its parameters in order, those at their RFC 5545 default left out.
+
+    The value is kept as written: an escaped comma is not a list separator.  A parameter's
+    list of values is a set, like the parameters themselves.
+    """
+    try:
+        name, params, value = Contentline(line.decode()).raw_parts()  # type: ignore[no-untyped-call]  # icalendar leaves it unannotated
+    except ValueError:  # icalendar's own lines parse, so this one is a server's: compared verbatim
+        return line.decode(), (), ""
+    kept = sorted(
+        (key.upper(), tuple(sorted(str(v) for v in values)))
+        for key, raw in params.items()
+        for values in [raw if isinstance(raw, list) else [raw]]
+        if not (len(values) == 1 and PARAMETER_DEFAULTS.get(key.upper()) == str(values[0]).upper())
+    )
+    return name.upper(), tuple(kept), value
 
 
 def _recurs(component: icalendar.Component) -> bool:

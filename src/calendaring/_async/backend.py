@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self
 from urllib.parse import urlsplit
 
 from ..capabilities import Capabilities, Feature, Support
-from ..errors import AmbiguousError, ConfigurationError, NotFoundError, UnsupportedError
+from ..errors import AmbiguousError, CalendaringError, ConfigurationError, NotFoundError, UnsupportedError
 from ..loss import LossPolicy
 from ..types import Component
-from .collection import AsyncCollection
+from .collection import COMPONENT_FEATURE, AsyncCollection
 
 if TYPE_CHECKING:
     from .workspace import AsyncWorkspace
@@ -25,6 +25,18 @@ SCHEMES = {"": "files", "file": "files", "webcal": "feed", "memory": "memory", "
 
 # Backend kinds that come with an optional extra, and its name.
 EXTRAS = {"caldav": "caldav"}
+
+
+def _none_held(components: frozenset[Component], backend: str, *, left: str | None = None) -> UnsupportedError:
+    """The refusal of a collection that would hold none of ``components``, for the first of them.
+
+    ``left`` names one that was made and could not be deleted again.
+    """
+    wanted = sorted(components, key=str)
+    message = f"cannot make a collection holding any of {[str(c) for c in wanted]}"
+    if left is not None:
+        message += f"; the one made, {left!r}, could not be deleted"
+    return UnsupportedError(COMPONENT_FEATURE[wanted[0]], message, backend=backend)
 
 
 class AsyncBackend(ABC):
@@ -119,9 +131,23 @@ class AsyncBackend(ABC):
     ) -> AsyncCollection:
         if self.capabilities.level(Feature.CREATE_COLLECTION) is Support.UNSUPPORTED:
             raise UnsupportedError(Feature.CREATE_COLLECTION, backend=self.id)
-        return await self._create_collection(name, frozenset(components))
+        wanted = frozenset(components)
+        made = await self._create_collection(name, wanted)
+        if wanted and not made.components & wanted:  # Bedework makes events-only calendars whatever is asked
+            if self.capabilities.level(Feature.DELETE_COLLECTION) is Support.UNSUPPORTED:
+                raise _none_held(wanted, self.id, left=made.id)
+            try:
+                await made.delete_collection()
+            except CalendaringError as exc:
+                raise _none_held(wanted, self.id, left=made.id) from exc
+            raise _none_held(wanted, self.id)
+        return made
 
     async def _create_collection(self, name: str, components: frozenset[Component]) -> AsyncCollection:
+        """Make the collection; one that holds none of ``components`` is deleted again and refused.
+
+        A backend that knows it cannot hold any of them raises ``_none_held()`` itself, before any I/O.
+        """
         raise NotImplementedError(f"{type(self).__name__} declares {Feature.CREATE_COLLECTION} but cannot")
 
     # --- lifecycle ----------------------------------------------------

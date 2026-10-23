@@ -526,7 +526,7 @@ class AsyncConformance:
             assert (await collection.get(longer.uid)).native_id == longer.native_id
             with pytest.raises(NotFoundError):
                 await collection.get(f"-{suffix}")
-        if backend.capabilities.supports(Feature.CREATE_COLLECTION):
+        if backend.capabilities.supports(Feature.CREATE_COLLECTION, allow_lossy=True):
             other = await self.open_collection(backend, "conformance-other")
             if writable(other) and holds(other, Component.TASK):
                 elsewhere = await other.add_task(summary="in another collection")
@@ -1119,7 +1119,7 @@ class AsyncConformance:
     ) -> None:
         if level(collection, Feature.CHANGES) is Support.UNSUPPORTED:
             return  # test_a_bad_token_raises checked that changes() raises
-        if not backend.capabilities.supports(Feature.CREATE_COLLECTION):
+        if not backend.capabilities.supports(Feature.CREATE_COLLECTION, allow_lossy=True):
             pytest.skip("a second collection is needed, and the backend cannot make one")
         other = await self.open_collection(backend, "conformance-other")
         if level(other, Feature.CHANGES) is Support.UNSUPPORTED:
@@ -1273,10 +1273,11 @@ class AsyncConformance:
         [meeting] = await self.seed(collection, [Event.new(summary="planning", start=at(5, 9), end=at(5, 10))])
         if await self.assert_time_log_unsupported(collection, meeting) or not writable(collection):
             return
+        before = await collection.reload(meeting)  # as stored: a server may add to what was sent
         await meeting.log_time(start=at(5, 9), end=at(5, 10), users=("mailto:alice@example.com",))
         [entry] = await meeting.time_log()
         assert entry.duration == HOUR
-        assert await collection.reload(meeting) == meeting, "logging time does not touch the meeting itself"
+        assert await collection.reload(meeting) == before, "logging time does not touch the meeting itself"
 
     async def test_time_entries_in_a_range(self, collection: AsyncCollection) -> None:
         item = await self.logged_against(collection)
@@ -1296,7 +1297,7 @@ class AsyncConformance:
         if level(collection, Feature.MOVE) is Support.UNSUPPORTED:
             await self.assert_unsupported(collection, Feature.MOVE, lambda: collection.move(task, collection))
             return
-        if not backend.capabilities.supports(Feature.CREATE_COLLECTION):
+        if not backend.capabilities.supports(Feature.CREATE_COLLECTION, allow_lossy=True):
             pytest.skip("a second collection is needed, and the backend cannot make one")
         target = await self.open_collection(backend, "conformance-target")
         moved = await collection.move(task, target)
@@ -1310,7 +1311,7 @@ class AsyncConformance:
         if Support.UNSUPPORTED in (level(collection, Feature.CHANGES), level(collection, Feature.MOVE)):
             return  # the tests of each feature checked that it raises
         task = await self.add_task(collection, summary="moving")
-        if not backend.capabilities.supports(Feature.CREATE_COLLECTION):
+        if not backend.capabilities.supports(Feature.CREATE_COLLECTION, allow_lossy=True):
             pytest.skip("a second collection is needed, and the backend cannot make one")
         target = await self.open_collection(backend, "conformance-target")
         if level(target, Feature.CHANGES) is Support.UNSUPPORTED:
@@ -1342,6 +1343,28 @@ class AsyncConformance:
             if name is not None:  # a borrowed or reused collection is put back as it was
                 await collection.set_name(name)
 
+    async def test_create_collection_holds_one_of_what_was_asked(self, backend: AsyncBackend) -> None:
+        """A collection holding none of the requested components is refused, not made."""
+        if not backend.capabilities.supports(Feature.CREATE_COLLECTION, allow_lossy=True):
+            pytest.skip("the backend makes no collections")
+        deletable = backend.capabilities.level(Feature.DELETE_COLLECTION) is not Support.UNSUPPORTED
+        if not deletable and await self.left_behind(backend, "conformance-events") is not None:
+            return  # the run that left it checked it
+        before = [c.id for c in await backend.collections()]
+        refused: UnsupportedError | None = None
+        try:
+            made = await backend.create_collection("conformance-events", components=(Component.EVENT,))
+        except UnsupportedError as exc:
+            refused = exc
+        if refused is not None:
+            assert refused.feature == Feature.COMPONENT_EVENT
+            if deletable:
+                assert [c.id for c in await backend.collections()] == before, "a refused collection was left behind"
+            return
+        if deletable:
+            self._made.append(made)
+        assert Component.EVENT in made.components
+
     async def test_create_and_delete_collection(self, backend: AsyncBackend) -> None:
         before = [c.id for c in await backend.collections()]
         if backend.capabilities.level(Feature.CREATE_COLLECTION) is Support.UNKNOWN:
@@ -1356,8 +1379,10 @@ class AsyncConformance:
                     self._made.append(attempted)
             assert attempted.components == frozenset({Component.TASK})
             assert attempted.id in [c.id for c in await backend.collections()]
+            for kind, (_, _, _, _, feature) in KINDS.items():
+                assert (kind == Component.TASK) == (level(attempted, feature) is not Support.UNSUPPORTED), feature
             return
-        if not backend.capabilities.supports(Feature.CREATE_COLLECTION):
+        if not backend.capabilities.supports(Feature.CREATE_COLLECTION, allow_lossy=True):
             with pytest.raises(UnsupportedError) as info:
                 await backend.create_collection("conformance-new")
             assert info.value.feature == Feature.CREATE_COLLECTION
@@ -1366,10 +1391,27 @@ class AsyncConformance:
         deletable = backend.capabilities.supports(Feature.DELETE_COLLECTION)
         # Without delete-collection, only the first run on a backend makes it: later ones find it left there.
         made = None if deletable else await self.left_behind(backend, "conformance-new")
+        lossy = backend.capabilities.level(Feature.CREATE_COLLECTION) is Support.LOSSY
         if made is None:
-            made = await backend.create_collection("conformance-new", components=(Component.TASK,))
-        assert made.components == frozenset({Component.TASK})
+            refused: UnsupportedError | None = None
+            try:
+                made = await backend.create_collection("conformance-new", components=(Component.TASK,))
+            except UnsupportedError as exc:
+                if not lossy:
+                    raise
+                refused = exc
+            if refused is not None:
+                # The requested set is not kept, and what was made held no tasks (Bedework: events only).
+                assert refused.feature == Feature.COMPONENT_TASK
+                if deletable:
+                    assert [c.id for c in await backend.collections()] == before, "a refused collection was left behind"
+                return
+        assert made is not None
+        if not lossy:  # where it is, create_collection() saw to it that tasks are among what it holds
+            assert made.components == frozenset({Component.TASK})
         assert made.id in [c.id for c in await backend.collections()]
+        for kind, (_, _, _, _, feature) in KINDS.items():
+            assert (kind in made.components) == (level(made, feature) is not Support.UNSUPPORTED), feature
         if not deletable:
             with pytest.raises(UnsupportedError) as info:
                 await made.delete_collection()

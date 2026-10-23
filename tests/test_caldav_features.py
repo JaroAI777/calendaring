@@ -111,3 +111,18 @@ def test_time_range_narrows_events_only_where_recurrences_match_too() -> None:
     }
     no_implicit = hinted(**{"search": "full", "search.recurrences.includes-implicit.event": "unsupported"})
     assert collection_capabilities(no_implicit, ALL).details(Feature.SEARCH_TIME_RANGE) == {"components": []}
+
+
+def test_a_calendar_is_made_lossily_where_the_server_ignores_the_component_set() -> None:
+    server = hinted(save_load="full", create_calendar="full")
+    assert backend_capabilities(server).level(Feature.CREATE_COLLECTION) is Support.FULL
+    ignored = features(
+        {
+            "save-load": {"support": "full"},
+            "create-calendar": {"support": "full"},
+            "create-calendar.with-supported-component-types": {"support": "unsupported"},
+        }
+    )
+    capability = backend_capabilities(ignored)[Feature.CREATE_COLLECTION]
+    assert capability.level is Support.LOSSY
+    assert "components" in (capability.note or "")
