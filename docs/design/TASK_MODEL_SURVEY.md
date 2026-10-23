@@ -991,7 +991,7 @@ for time *recorded* rather than time *planned*.
 
 ### 4.4 Details to be decided later
 
-* How to tag a `VEVENT` as a work-log; can be done through `CATEGORIES:WORKLOG`, an `X-` property, or membership of a dedicated collection.
+* How to tag a `VEVENT` as a work-log; can be done through `CATEGORIES:WORKLOG`, an `X-` property, or membership of a dedicated collection. *Settled in roadmap 1.6: `X-PYCAL-TIME-ENTRY` ("Time tracking" in [API_DESIGN §3.4](API_DESIGN.md#34-task)).*
 
 * Should we carry the `remaining` duration, considering that only two of the nine systems with a task model of their own support it?
 

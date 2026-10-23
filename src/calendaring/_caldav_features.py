@@ -97,6 +97,7 @@ STORED = frozenset(
         Feature.TASK_ESTIMATE,
         Feature.ALARMS,
         Feature.DATES,
+        Feature.TIME_LOG,
     }
 )
 
@@ -152,4 +153,6 @@ def collection_capabilities(features: Any, components: frozenset[Component]) -> 
     table[Feature.SEARCH_TIME_RANGE] = _time_range(features)
     for kind, (feature, name) in COMPONENT_FROM_SERVER.items():
         table[feature] = _level(features, name) if kind in components else U
+    if Component.EVENT not in components:  # time entries are VEVENTs in the item's own collection
+        table[Feature.TIME_LOG] = {"level": U, "note": "holds no events to log time in; set time_log_collection"}
     return Capabilities({f: Capability.coerce(v) for f, v in table.items()})

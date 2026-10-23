@@ -84,7 +84,10 @@ annotated, and do not silence an `unused-coroutine` error.
    (`_query`, `_fetch`, `_create`, `_update`, `_delete`).  Capability
    checks, loss policies, client-side filtering and the rest are written
    once in the base classes.  `_async/memory.py`, the reference backend,
-   is the smallest complete example.
+   is the smallest complete example.  A backend with a time log of its
+   own (a tracker) also overrides `_time_entries`, `_time_log`,
+   `_add_time`, `_amend_time` and `_delete_time`; the defaults store
+   entries as `VEVENT`s.
 2. Declare its capabilities honestly, in the `capabilities` each
    constructor takes.  The conformance suite asserts that an operation
    declared unsupported fails as specified.

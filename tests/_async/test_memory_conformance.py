@@ -19,7 +19,8 @@ from __future__ import annotations
 import copy
 import inspect
 from collections.abc import AsyncIterator, Mapping, Sequence
-from datetime import UTC, date, datetime, time
+from dataclasses import replace
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, ClassVar
 
 import icalendar
@@ -57,6 +58,7 @@ from calendaring.memory import (
     Profile,
 )
 from calendaring.testing import AsyncConformance
+from calendaring.timetracking import TimeEntry
 from calendaring.types import StoredObject
 
 
@@ -171,6 +173,88 @@ class TestTaskFeedProfile(TestFeedProfile):
 
     async def open_backend(self) -> AsyncBackend:
         return AsyncMemoryBackend(profile=TASK_FEED)
+
+
+class OwnTimeLog(AsyncMemoryCollection):
+    """A tracker's own time log, as Request Tracker keeps it: who, how long and a comment, not when."""
+
+    def _log(self) -> list[tuple[str, TimeEntry]]:
+        if not hasattr(self.store, "time_log"):
+            self.store.time_log = []  # type: ignore[attr-defined]  # kept with the calendar, as the tracker would
+        return self.store.time_log  # type: ignore[attr-defined, no-any-return]
+
+    async def _time_entries(
+        self, start: datetime | None, end: datetime | None, *, parent: str | None = None
+    ) -> list[tuple[str | None, TimeEntry]]:
+        return [
+            (uid, e) for uid, e in self._log() if start is None or end is None or (e.logged and start <= e.logged < end)
+        ]
+
+    async def _time_log(self, item: Item) -> list[TimeEntry]:
+        return [e for uid, e in self._log() if uid == item.uid]
+
+    async def _add_time(self, item: Item, entry: TimeEntry) -> TimeEntry:
+        kept = replace(entry, start=None, end=None, id=f"log-{len(self._log()) + 1}")
+        self._log().append((item.uid, kept))
+        return kept
+
+    async def _amend_time(self, item: Item, old: TimeEntry, new: TimeEntry) -> TimeEntry:
+        kept = replace(new, start=None, end=None)
+        self._log()[:] = [(uid, kept if e.id == old.id else e) for uid, e in self._log()]
+        return kept
+
+    async def _delete_time(self, item: Item, entry: TimeEntry) -> None:
+        self._log()[:] = [(uid, e) for uid, e in self._log() if e.id != entry.id]
+
+
+class TotalOnly(AsyncMemoryCollection):
+    """A tracker that keeps only the total time spent on a task."""
+
+    def _totals(self) -> dict[str, timedelta]:
+        if not hasattr(self.store, "totals"):
+            self.store.totals = {}  # type: ignore[attr-defined]  # kept with the calendar, as the tracker would
+        return self.store.totals  # type: ignore[attr-defined, no-any-return]
+
+    async def _time_entries(
+        self, start: datetime | None, end: datetime | None, *, parent: str | None = None
+    ) -> list[tuple[str | None, TimeEntry]]:
+        return [(uid, TimeEntry(total)) for uid, total in self._totals().items()]
+
+    async def _time_log(self, item: Item) -> list[TimeEntry]:
+        total = self._totals().get(item.uid)
+        return [] if total is None else [TimeEntry(total)]
+
+    async def _add_time(self, item: Item, entry: TimeEntry) -> TimeEntry:
+        self._totals()[item.uid] = self._totals().get(item.uid, timedelta(0)) + entry.person_time
+        return TimeEntry(entry.duration)
+
+
+def time_log_profile(name: str, time_log: dict[str, Any]) -> Profile:
+    return Profile(name, {**TRACKER.capabilities, Feature.TIME_LOG: time_log}, TRACKER.components)
+
+
+OWN_TIME_LOG = time_log_profile("own-time-log", {"level": Support.LOSSY, "lost": ["start-time", "end"]})
+TOTAL_ONLY = time_log_profile("total-only", {"level": Support.LOSSY, "total-only": True})
+
+
+class TestOwnTimeLogProfile(AsyncConformance):
+    """A tracker whose time log drops when the work was done."""
+
+    async def open_backend(self) -> AsyncBackend:
+        class Backend(AsyncMemoryBackend):
+            collection_class = OwnTimeLog
+
+        return Backend(profile=OWN_TIME_LOG)
+
+
+class TestTotalOnlyProfile(AsyncConformance):
+    """A tracker that keeps only a total."""
+
+    async def open_backend(self) -> AsyncBackend:
+        class Backend(AsyncMemoryBackend):
+            collection_class = TotalOnly
+
+        return Backend(profile=TOTAL_ONLY)
 
 
 def sharing(profile: Profile, store: MemoryStore | None = None) -> AsyncMemoryBackend:
@@ -460,6 +544,22 @@ class CompletesNothing(AsyncMemoryCollection):
         return self.bind(task)
 
 
+class InventsStartTimes(OwnTimeLog):
+    """Declares the start time lost, then makes one up on reading."""
+
+    async def _time_log(self, item: Item) -> list[TimeEntry]:
+        return [replace(e, start=e.logged) for e in await super()._time_log(item)]
+
+
+class IgnoresTheRange(AsyncMemoryCollection):
+    """Answers a time-range search for entries with every entry."""
+
+    async def _time_entries(
+        self, start: datetime | None, end: datetime | None, *, parent: str | None = None
+    ) -> list[tuple[str | None, TimeEntry]]:
+        return await super()._time_entries(None, None, parent=parent)
+
+
 # What the suite raises when it catches a defect: its own assertion, or a
 # pytest.raises that did not raise.  The round trip catches through verify=True.
 ASSERTS = (AssertionError, pytest.fail.Exception)
@@ -494,6 +594,8 @@ CAUGHT: list[tuple[type[AsyncMemoryCollection], str, dict[str, Any], Any]] = [
     (StartsInRange, "test_search_gives_the_client_side_answer", {"name": "events-in-range"}, ASSERTS),
     (StartsInRange, "test_search_gives_the_client_side_answer", {"name": "tasks-in-range"}, ASSERTS),
     (CompletesNothing, "test_complete_a_recurring_task", {}, ASSERTS),
+    (InventsStartTimes, "test_time_log_round_trips_as_declared", {}, ASSERTS),
+    (IgnoresTheRange, "test_time_entries_in_a_range", {}, ASSERTS),
 ]
 
 
@@ -512,6 +614,8 @@ async def test_the_suite_catches(
     NoDeletionsFeed.seen.clear()
     FrozenFeed.first = None
     profile, suite = (FEED, TestFeedProfile()) if broken in (FrozenFeed, NoDeletionsFeed) else (FULL, TestFullProfile())
+    if issubclass(broken, OwnTimeLog):
+        profile = OWN_TIME_LOG
     suite._made, suite._borrowed = [], []
     backend = Backend(profile=profile)
     collection = await suite.open_collection(backend)

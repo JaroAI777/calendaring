@@ -8,8 +8,8 @@ without a stale etag.  The collection methods are the primitive.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from datetime import datetime
+from collections.abc import Iterable, Sequence
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, NoReturn, Self
 
 import icalendar
@@ -17,6 +17,7 @@ import icalendar
 from ..errors import UnsupportedError
 from ..items import Event, Item, Journal, Task
 from ..loss import LossPolicy
+from ..timetracking import TimeEntry
 from ..types import Scope
 
 if TYPE_CHECKING:
@@ -62,6 +63,34 @@ class AsyncItem(Item):
     async def relatives(self, reltype: str | None = None) -> list[AsyncItem]:
         return await self.collection.relatives(self, reltype)
 
+    # --- the time log (§3.4) -------------------------------------------
+
+    async def time_log(self) -> list[TimeEntry]:
+        return await self.collection.time_log(self)
+
+    async def time_spent(self) -> timedelta:
+        return await self.collection.time_spent(self)
+
+    async def log_time(
+        self,
+        *,
+        spent: timedelta | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        day: date | None = None,
+        users: Iterable[str] = (),
+        comment: str | None = None,
+    ) -> TimeEntry:
+        return await self.collection.log_time(
+            self, spent=spent, start=start, end=end, day=day, users=users, comment=comment
+        )
+
+    async def amend_time(self, entry: TimeEntry, **changes: Any) -> TimeEntry:
+        return await self.collection.amend_time(self, entry, **changes)
+
+    async def delete_time(self, entry: TimeEntry) -> None:
+        await self.collection.delete_time(self, entry)
+
     def __reduce_ex__(self, protocol: Any) -> NoReturn:
         raise TypeError("a bound item carries a live session; pickle item.as_data() instead")
 
@@ -82,6 +111,16 @@ class AsyncTask(Task, AsyncItem):
 
     async def uncomplete(self, *, loss: LossPolicy | None = None, verify: bool | None = None) -> None:
         self._take(await self.collection.uncomplete(self, loss=loss, verify=verify))
+
+    async def start_timer(self, at: datetime | None = None) -> None:
+        self._take(await self.collection.start_timer(self, at))
+
+    async def stop_timer(
+        self, at: datetime | None = None, *, users: Iterable[str] = (), comment: str | None = None
+    ) -> TimeEntry:
+        task, entry = await self.collection.stop_timer(self, at, users=users, comment=comment)
+        self._take(task)
+        return entry
 
 
 class AsyncEvent(Event, AsyncItem):

@@ -793,7 +793,7 @@ class Task(Item):                       # component is an icalendar.Todo
     native_priority: str | None         # likewise
     planned_start: datetime | None      # X-PYCAL-PLANNED-START (see "Properties with no standard home")
     planned_end: datetime | None        # X-PYCAL-PLANNED-END
-    # time_log, time_spent: added by roadmap 1.6
+    # the time log: see "Time tracking" below, on every bound item
 
     def set_duration(self, duration: timedelta, keep: Literal["start", "due"] = "due") -> None: ...
 ```
@@ -843,6 +843,133 @@ Decisions in it, each from the survey:
   thing. The name, role and participation status are the `ATTENDEE`'s
   `CN`, `ROLE` and `PARTSTAT` parameters, on `icalendar`'s `vCalAddress`.
 
+#### Time tracking
+
+From [roadmap 1.6](ROADMAP.md#16-time-tracking-model-and-api), on the
+survey's model ([§4.2](TASK_MODEL_SURVEY.md#42-the-time-model), option D of
+[§4.3](TASK_MODEL_SURVEY.md#43-the-icalendar-representation-of-time-spent--a-recommendation)).  Time spent is an
+append-only log of entries, and the total is derived from it.  Time is
+logged against a task, or against an event the user took part in (a
+meeting).
+
+```python
+@dataclass(frozen=True)
+class TimeEntry:                        # calendaring.timetracking, mode-free
+    duration: timedelta
+    start: datetime | None = None
+    end: datetime | None = None         # None, with start set: the running timer
+    users: tuple[str, ...] = ()         # calendar addresses (mailto: or a profile URL, as for assignees)
+    comment: str | None = None
+    logged: datetime | None = None      # when it was recorded (CREATED)
+    id: str | None = None               # the entry's UID, or the backend's id for it
+
+# on a bound item (task or event); reading the log is a query, so these are methods
+await item.time_log() -> list[TimeEntry]           # by start; a running timer last
+await item.time_spent() -> timedelta               # the sum, a running timer up to now
+await item.log_time(*, spent=None, start=None, end=None, day=None,
+                    users=(), comment=None) -> TimeEntry
+await item.amend_time(entry, **changes) -> TimeEntry
+await item.delete_time(entry)
+await task.start_timer(at=None)                    # tasks only
+await task.stop_timer(at=None, *, users=(), comment=None) -> TimeEntry
+await collection.time_entries(start, end) -> list[tuple[str, TimeEntry]]   # (item UID, entry)
+```
+
+- **`log_time` takes two of `spent`, `start` and `end`**, and raises
+  `ValueError` if three disagree, so a CLI's `--spent/--start/--end` is a
+  thin layer.  `spent` alone ends the entry now.
+- **`spent` with `day`** ("3 h on this, 2 h on that, on Tuesday") lines
+  the entry up after the last entry the same people logged that day, or
+  at `collection.workday_start` (08:00 local) when there is none.  The
+  day's sum is then right, though the times are made up; a day that
+  fills up runs on past midnight rather than lose time.  RFC 5545 has no
+  other way: a `DURATION` after a `DATE` `DTSTART` must be whole days.
+- **`amend_time`** changes what it is given and keeps the rest: `spent`
+  alone keeps the start, `spent` with `end` keeps the end.  It edits the
+  stored entry in place, so what other clients added to it stays.  An
+  entry that has no times (from a backend that drops them) keeps none:
+  times are never invented.
+- **Times are never floating by accident.**  A time in a zone without an
+  IANA name (what `astimezone()` gives) is stored in UTC, and a floating
+  time mixed with a zoned one raises `ValueError`.
+- **The running timer is not an entry.**  `start_timer()` writes
+  `X-PYCAL-TIMER-START` on the `VTODO`, and `stop_timer()` removes it and
+  logs the entry.  A `VEVENT` without `DTEND` is an instant (RFC 5545), so
+  an open entry cannot be one.  The timer syncs to other devices with the
+  task, and works where entries do not.
+
+**In iCalendar**, an entry is a `VEVENT`:
+
+```
+BEGIN:VEVENT
+UID:…
+DTSTAMP:…
+CREATED:20261020T163000Z                 when it was logged
+DTSTART:20261020T130000Z
+DTEND:20261020T150000Z
+SUMMARY:<the task's summary when logged>
+DESCRIPTION:<the comment>
+RELATED-TO;RELTYPE=PARENT:<the task's or event's UID>
+X-PYCAL-TIME-ENTRY:TRUE
+BEGIN:PARTICIPANT                        one per user (RFC 9073)
+UID:…
+PARTICIPANT-TYPE:ACTIVE
+CALENDAR-ADDRESS:mailto:alice@example.com
+END:PARTICIPANT
+END:VEVENT
+```
+
+- **Who did the work is a `PARTICIPANT`, never an `ATTENDEE`.**  RFC 9073
+  §7.1.1 makes a participant schedulable only when its
+  `CALENDAR-ADDRESS` matches an `ATTENDEE`.  With none, no server sends
+  invitations, which an `ATTENDEE` would make it do (RFC 6638).  The
+  tasks draft (§6) assigns with the same component.  An entry may name
+  several people; one duration then applies to each.  Two people who
+  spent different times log two entries.
+- **`X-PYCAL-TIME-ENTRY` marks it**, so the entry is recognised in any
+  collection and after a copy.  `RELATED-TO` alone also matches ordinary
+  sub-events, and `CATEGORIES` collides with users' own.
+- **Entries go to the item's collection by default**, or to
+  `collection.time_log_collection` (and are searched there).  Many CalDAV
+  task lists hold only `VTODO`, and some servers cannot hold entries at
+  all, so a separate calendar for the log is normal.
+- **A `VJOURNAL` is not used**: it has no `DTEND` or `DURATION`, and iCloud
+  and Google do not store it.  A journal note can point at an entry with
+  `RELATED-TO`.
+
+**The capability is `time-log`.**
+- `FULL` where entries round-trip.
+- `LOSSY` where the backend keeps entries but drops fields, with
+  `details["lost"]` naming them (`start-time`, `end`, `users`,
+  `comment`).  Request Tracker records only when time was logged, and
+  OpenProject only a date.  Those fields read back as `None`, never
+  invented, so the backend's declaration says what an entry from it
+  lacks, and no event carries an "untimed" marker.
+- `details["total-only"]` for a backend that keeps only a sum: reading
+  gives one entry with the total and no start, and `amend_time` and
+  `delete_time` raise `UnsupportedError`.
+- `UNSUPPORTED` raises before any I/O.
+- A tracker backend maps entries onto its own time log (roadmap 2.5) by
+  overriding the collection's `_time_entries`, `_time_log`, `_add_time`,
+  `_amend_time` and `_delete_time`.  The rule: the capability is the log
+  collection's (the item's own, unless `time_log_collection` is set); the
+  hooks and settings are the item's collection's, and the default hooks
+  store into the log collection.
+- A time entry is not a subtask: `relatives()` leaves entries out.
+
+**For `sum_hours`**, `calendaring.timetracking.summarize(pairs, group_by=…,
+window=(start, end))` groups `(item, entries)` pairs into
+`TimeSummary(estimate, spent)` per key.  `estimate` is the
+`ESTIMATED-DURATION` of the open tasks, and `spent` the logged time.  The
+two are kept apart, since committed and spent time answer different
+questions.  The window clips entries, prorating one that straddles an
+edge; an entry with no start counts by when it was logged.
+
+**Not settled:** percent-complete per entry (no system in the survey has
+it), an activity type or billable flag (would be `CATEGORIES`), and where
+an entry belongs after a recurring task is completed "safely" (it stays
+with the UID it was logged against: [survey §4.4](TASK_MODEL_SURVEY.md#44-details-to-be-decided-later)).
+
 ### 3.5 Native passthrough
 
 `native_status` and `native_priority` are a plain `str | None`, set by the
@@ -875,8 +1002,8 @@ not `X-CALENDARING-`:
 - the package name may change (see the top of this document), and once
   written into users' calendars a prefix cannot.
 
-In this document: `X-PYCAL-PLANNED-START`, `X-PYCAL-PLANNED-END`.
-[roadmap 1.6](ROADMAP.md#16-time-tracking-model-and-api) adds its own. Each gets a line in a
+In this document: `X-PYCAL-PLANNED-START`, `X-PYCAL-PLANNED-END`, and from
+[roadmap 1.6](ROADMAP.md#16-time-tracking-model-and-api) `X-PYCAL-TIME-ENTRY` and `X-PYCAL-TIMER-START` ("Time tracking" above). Each gets a line in a
 registry table in the user documentation ([roadmap 4.1](ROADMAP.md#41-documentation-structure-and-api-reference)), with the standard property
 that would replace it if one appears.
 
@@ -1075,6 +1202,7 @@ initial set:
 | `alarms` | `VALARM` components survive; `UNSUPPORTED` drops them |
 | `timezones` | a time with a `TZID` keeps it (with its `VTIMEZONE`), a floating time stays floating; `LOSSY` stores both in UTC, a floating time read as local time ([§4](#4-search)) |
 | `dates` | a `DATE` value stays a date; `LOSSY` stores midnight UTC |
+| `time-log` | the time log of a task or event ("Time tracking" in [§3.4](#34-task)); `LOSSY` with `details["lost"]`, or `details["total-only"]` |
 
 Text is not a feature: non-ASCII, escaped and multi-line text, and every
 value of a property with several, round-trip on every backend.  The
@@ -1085,7 +1213,7 @@ Feature names are identifiers, not attribute paths: `task.due` means "stores a
 task's `DUE`", which is read as `task.component.DUE`, and `task.estimate`
 means `ESTIMATED-DURATION`.
 
-[roadmap 1.6](ROADMAP.md#16-time-tracking-model-and-api) adds `task.time-log` and friends. Below 1.0 the list grows as backends need
+[roadmap 1.6](ROADMAP.md#16-time-tracking-model-and-api) added `time-log` ("Time tracking" in [§3.4](#34-task)). Below 1.0 the list grows as backends need
 it ([§10 Open questions](#10-open-questions), Q7). The conformance suite
 iterates over `Feature`, and a backend's declaration must cover every member
 (missing = test failure, not a silent default).

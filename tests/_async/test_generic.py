@@ -3,8 +3,12 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta, timezone
+import time as clock
+from collections.abc import Iterator
+from datetime import UTC, date, datetime, timedelta, timezone
+from typing import ClassVar
 
+import icalendar
 import pytest
 from icalendar_searcher import Searcher
 
@@ -399,3 +403,131 @@ async def test_get_on_overrides_without_a_master_returns_the_earliest() -> None:
     found = await collection.get("invited")
     assert found.is_occurrence
     assert str(found.component["SUMMARY"]) == "earlier"
+
+
+# --- the time log (§3.4), beyond the conformance suite -------------------
+
+HOUR = timedelta(hours=1)
+
+
+@pytest.fixture
+def oslo(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Local time in Oslo, where summer time is CEST: not an IANA name."""
+    monkeypatch.setenv("TZ", "Europe/Oslo")
+    clock.tzset()
+    yield
+    monkeypatch.undo()
+    clock.tzset()
+
+
+async def test_a_day_of_durations_is_valid_icalendar_in_any_time_zone(oslo: None) -> None:
+    collection = await AsyncMemoryBackend().collection("default")
+    task = await collection.add_task(summary="x")
+    summer = date(2026, 7, 3)
+    first = await task.log_time(spent=3 * HOUR, day=summer)
+    second = await task.log_time(spent=2 * HOUR, day=summer)
+    assert first.start is not None
+    assert first.start.utcoffset() is not None, "an entry's times are never floating"
+    assert first.start == datetime(2026, 7, 3, 6, tzinfo=UTC), "08:00 in Oslo, summer time"
+    assert second.start == first.end
+    for _, entry in await collection.time_entries(datetime(2026, 7, 3, tzinfo=UTC), datetime(2026, 7, 4, tzinfo=UTC)):
+        assert entry.start is not None
+        assert entry.start.tzinfo is not None
+
+
+async def test_a_day_lines_up_per_person_and_may_run_past_midnight() -> None:
+    collection = await AsyncMemoryBackend().collection("default")
+    task = await collection.add_task(summary="x")
+    day = date(2026, 11, 3)
+    alice, bob = ("mailto:alice@example.com",), ("mailto:bob@example.com",)
+    a1 = await task.log_time(spent=9 * HOUR, day=day, users=alice)
+    b1 = await task.log_time(spent=HOUR, day=day, users=bob)
+    assert b1.start == a1.start, "bob's day is not pushed by alice's"
+    late = await task.log_time(spent=10 * HOUR, day=day, users=alice)
+    assert late.start == a1.end
+    assert late.end is not None
+    assert late.end.date() > day, "a long day keeps its sum, past midnight"
+
+
+async def test_time_entries_are_not_subtasks() -> None:
+    collection = await AsyncMemoryBackend().collection("default")
+    task = await collection.add_task(summary="parent")
+    child = await collection.add_task(summary="child", related_to=task.uid)
+    await task.log_time(spent=HOUR)
+    assert [r.uid for r in await task.relatives("CHILD")] == [child.uid]
+
+
+async def test_a_separate_time_log_collection() -> None:
+    backend = AsyncMemoryBackend()
+    tasks = await backend.create_collection("tasks", components=[Component.TASK])
+    log = await backend.create_collection("time log", components=[Component.EVENT])
+    tasks.time_log_collection = log
+    task = await tasks.add_task(summary="x")
+    entry = await task.log_time(start=datetime(2026, 11, 3, 9, tzinfo=UTC), end=datetime(2026, 11, 3, 10, tzinfo=UTC))
+    assert [e.id for e in await task.time_log()] == [entry.id]
+    assert [i.uid for i in await log.search()] == [entry.id]
+    assert await tasks.events() == []
+    tasks.time_log_collection = None
+    with pytest.raises(UnsupportedError):
+        await task.log_time(spent=HOUR)  # the task list itself holds no events
+
+
+async def test_amend_time_edits_the_entry_in_place() -> None:
+    collection = await AsyncMemoryBackend().collection("default")
+    task = await collection.add_task(summary="before")
+    entry = await task.log_time(start=datetime(2026, 11, 3, 9, tzinfo=UTC), end=datetime(2026, 11, 3, 10, tzinfo=UTC))
+    assert entry.id is not None
+    stored = await collection.get(entry.id)
+    stored.component.add("CATEGORIES", ["billable"])
+    stored.component.add("X-OTHER-CLIENT", "kept")
+    await stored.save()
+    task.component["SUMMARY"] = "after"
+    await task.save()
+    amended = await task.amend_time(entry, spent=2 * HOUR)
+    again = await collection.get(entry.id)
+    assert b"CATEGORIES:billable" in again.to_ical()
+    assert str(again.component["X-OTHER-CLIENT"]) == "kept"
+    assert str(again.component["SUMMARY"]) == "before", "the summary is the task's when it was logged"
+    assert int(again.component.get("SEQUENCE", 0)) >= 1
+    assert (amended.start, amended.end) == (entry.start, datetime(2026, 11, 3, 11, tzinfo=UTC))
+    shortened = await task.amend_time(amended, spent=HOUR, end=datetime(2026, 11, 3, 11, tzinfo=UTC))
+    assert shortened.start == datetime(2026, 11, 3, 10, tzinfo=UTC), "spent with end keeps the end"
+
+
+async def test_naive_and_aware_times_do_not_mix() -> None:
+    collection = await AsyncMemoryBackend().collection("default")
+    task = await collection.add_task(summary="x")
+    with pytest.raises(ValueError, match="floating"):
+        await task.log_time(start=datetime(2026, 11, 3, 9, tzinfo=UTC), end=datetime(2026, 11, 3, 10))
+    await task.start_timer(at=datetime(2026, 11, 3, 9, tzinfo=UTC))
+    with pytest.raises(ValueError, match="floating"):
+        await task.stop_timer(at=datetime(2026, 11, 3, 10))
+
+
+class FailsTheNextSave(AsyncMemoryCollection):
+    """The next update fails, as on a network error or another device's edit."""
+
+    fail: ClassVar[bool] = False
+
+    async def _update(
+        self, native_id: str, calendar: icalendar.Calendar, *, etag: str | None, wire: bytes | None
+    ) -> StoredObject:
+        if FailsTheNextSave.fail:
+            FailsTheNextSave.fail = False
+            raise ConflictError("another device saved it meanwhile")
+        return await super()._update(native_id, calendar, etag=etag, wire=wire)
+
+
+async def test_stopping_a_timer_again_logs_it_once() -> None:
+    class Backend(AsyncMemoryBackend):
+        collection_class = FailsTheNextSave
+
+    collection = await Backend().collection("default")
+    task = await collection.add_task(summary="x")
+    await task.start_timer(at=datetime(2026, 11, 3, 9, tzinfo=UTC))
+    FailsTheNextSave.fail = True
+    with pytest.raises(ConflictError):
+        await task.stop_timer(at=datetime(2026, 11, 3, 10, tzinfo=UTC))
+    await task.stop_timer(at=datetime(2026, 11, 3, 10, tzinfo=UTC))
+    [entry] = await task.time_log()
+    assert entry.duration == HOUR
