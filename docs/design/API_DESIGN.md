@@ -1072,7 +1072,13 @@ Completing the occurrence is `icalendar` manipulation, which goes to
 [edit-icalendar](https://github.com/pycalendar/edit-icalendar); fetching and
 storing stay here ([§10 Open questions](#10-open-questions), Q3).  Until
 edit-icalendar has it, every backend declares `task.complete-recurring`
-`UNSUPPORTED`, the CalDAV backend included.
+`UNSUPPORTED`, the CalDAV backend included, and `complete()` on a task
+with an `RRULE` raises `UnsupportedError`. The design is discussed in
+[edit-icalendar issue 3](https://github.com/pycalendar/edit-icalendar/issues/3).
+Meanwhile a CalDAV caller can use the escape hatch: read the task
+(`get`, `search` or `reload`, see [§8](#8-the-escape-hatch)), call
+`task.native.complete(handle_rrule=True, rrule_mode="safe")`, then
+`task.reload()`.
 
 [§9 Migrating from caldav](#9-migrating-from-caldav) compares the whole of
 caldav's API with this one.
@@ -1536,6 +1542,12 @@ capability check, no loss check, and the item's `etag` is stale afterwards,
 so `reload()` it. The item's `native` is a snapshot from when it was read,
 not a live handle.
 
+On CalDAV, `native` is `None` on an item a write returns (`add()`,
+`save()`, and so `complete()` and `uncomplete()`) whenever the server
+answers with an ETag, because nothing was read back; `save()` replaces
+the `native` the item had. `get()`, `search()` and `reload()` set it.
+The files and memory backends set it on writes too.
+
 The other direction also works: `collection.wrap(native_item)` turns a
 backend object (a `caldav.Todo`, say) into this library's item, bound to
 that collection, without I/O; for a `caldav` object `wire` is its
@@ -1577,8 +1589,8 @@ caldav's public API as of 2026-10-08 (caldav 3.4.0).
 | `save(only_this_recurrence=None / False)` | — | escape hatch |
 | `expand_rrule(start, end)` on an object | `search(expand=True)`, or `recurring_ical_events` directly | changed |
 | "this and future" for events | — | missing in both |
-| `complete(handle_rrule=True, rrule_mode=…)` | `task.complete(mode=…)` | same modes; caldav's "interval from completion" guess is dropped |
-| `complete()` on a recurring task, default `handle_rrule=False` | `task.complete()` handles the `RRULE` (`mode="safe"`) | **behaviour change**: caldav completes the whole series by default |
+| `complete(handle_rrule=True, rrule_mode=…)` | `task.complete(mode=…)` | **not yet**: raises `UnsupportedError` on every backend until edit-icalendar has it ([§3.7](#37-recurrence)); on CalDAV, the escape hatch. Planned: the same modes, without caldav's "interval from completion" guess |
+| `complete()` on a recurring task, default `handle_rrule=False` | `task.complete()` will handle the `RRULE` (`mode="safe"`) | **behaviour change**, planned: caldav completes the whole series by default; until edit-icalendar, `task.complete()` raises instead |
 | `uncomplete()` | `task.uncomplete()` | same |
 | `is_pending()` | `task.component.status` | changed: no helper |
 | `get_due()`, `get_duration()`, `set_duration(movable_attr=…)`, `get_dtend()`, `set_end()` | `task.component.end`, `task.component.duration`, `task.set_duration(keep=…)`, `event.component.end` | same, through `icalendar`'s properties |
@@ -1591,10 +1603,12 @@ caldav's public API as of 2026-10-08 (caldav 3.4.0).
 | `propfind()`, `proppatch()`, `report()`, `mkcol()`, `request()` | — | escape hatch (`backend.native`) |
 | compatibility hints, `features:` profile | derived capabilities ([§5.1 The table](#51-the-table)); the profile stays in the config | same source |
 
-The two **not yet** rows are pure logic plus a relatives lookup, and fit
-in Phase 1 if plann needs them before roadmap 3.3. The behaviour change in
-`complete()` is deliberate: completing a whole series because the caller
-forgot a flag is the wrong default. caldav's own docstring says it may
+The `set_due` and reverse-relations **not yet** rows are pure logic plus a
+relatives lookup, and fit in Phase 1 if plann needs them before roadmap
+3.3. Recurring-task completion waits for edit-icalendar
+([§10 Open questions](#10-open-questions), Q3), which has no code yet.
+The behaviour change in `complete()` is deliberate: completing a whole
+series because the caller forgot a flag is the wrong default. caldav's own docstring says it may
 make the flag mandatory.
 
 ### 9.1 A migration path for plann
@@ -1613,7 +1627,9 @@ both ways:
 2. **Move the reads:** search, `get`, `relatives`. Where plann still holds
    caldav objects, `collection.wrap()` converts them.
 3. **Move the writes:** `add`, `save`, `complete`, with the `complete()`
-   default checked at every call site.
+   default checked at every call site. Completing a recurring task stays
+   on caldav (`task.native.complete(handle_rrule=True, …)`, then
+   `reload()`) until edit-icalendar has it ([§3.7](#37-recurrence)).
 4. **What is left is the gap list.** Every remaining `.native` call is a
    row in the table above that plann needs, and either gets added here or
    stays as a deliberate CalDAV-only feature.

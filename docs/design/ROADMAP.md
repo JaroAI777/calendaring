@@ -887,6 +887,22 @@ rewrite of the scaffolding and every backend's I/O path.
 backend most likely to expose the problem, because it must bridge to caldav's own
 dual-mode design — is the first one implemented.
 
+### Recurrence editing depends on edit-icalendar, which has no code yet
+
+Occurrence edits, "this and future" and recurring-task completion all go to
+[edit-icalendar](https://github.com/pycalendar/edit-icalendar)
+([API_DESIGN Q3](API_DESIGN.md#10-open-questions)). As of 2026-10-25 it has
+a README and no code, no item of this roadmap schedules it, and its design
+is still open ([edit-icalendar issue 3](https://github.com/pycalendar/edit-icalendar/issues/3)).
+Until it lands, `task.complete()` on a recurring task raises on every
+backend, which hits plann's everyday "complete" on a recurring task
+(3.3).
+
+**Mitigation:** the features are declared `UNSUPPORTED`, so callers can
+check before calling. On CalDAV the escape hatch keeps caldav's completion
+available ([API_DESIGN §3.7](API_DESIGN.md#37-recurrence)); the plann port
+uses it ([plann issue 55](https://github.com/pycalendar/plann/issues/55)).
+
 ### 2.4 depends on a sibling project that does not exist yet
 
 `calendaring-jmap` is separately funded and under way, but this roadmap cannot
